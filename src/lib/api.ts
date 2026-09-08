@@ -238,16 +238,22 @@ export function subscribeToArticlesChange(callback: () => void): () => void {
     }
   }
 
-  // Supabase PostgreSQL Realtime subscription
+  // Supabase PostgreSQL Realtime subscription (articles, categories, messages, and replies)
   let realtimeChannel: any = null;
   try {
-    const channelId = `realtime-articles-${Math.random().toString(36).substring(2, 9)}`;
+    const channelId = `realtime-portal-${Math.random().toString(36).substring(2, 9)}`;
     realtimeChannel = supabase
       .channel(channelId)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'articles' }, () => {
         callback();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, () => {
+        callback();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => {
+        callback();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'message_replies' }, () => {
         callback();
       })
       .subscribe();
@@ -632,50 +638,21 @@ export async function fetchCategories(): Promise<Category[]> {
     }
   }
 
-  // Apply any client-side modifications onto dbCats
-  dbCats = dbCats.map(cat => {
-    const mod = modifiedMap[cat.id] || modifiedMap[cat.slug] || modifiedMap[cat.name.toLowerCase()];
-    if (mod) {
-      return {
-        ...cat,
-        name: mod.name || cat.name,
-        slug: mod.slug || cat.slug,
-        description: mod.description !== undefined ? mod.description : cat.description
-      };
-    }
-    return cat;
-  });
-
+  // If categories are fetched directly from database, use them directly as the source of truth!
   let combined: Category[] = [];
   if (dbCats.length > 0) {
     combined = [...dbCats];
   } else {
     // Fallback only if database returned 0 categories
     const localCats = getLocalCategories();
-    for (const item of localCats) {
-      const mod = modifiedMap[item.id] || modifiedMap[item.slug] || modifiedMap[item.name.toLowerCase()];
-      const resolvedItem = mod ? { ...item, ...mod } : item;
-      const existingIndex = combined.findIndex(c => c.id === resolvedItem.id || c.slug === resolvedItem.slug);
-
-      if (existingIndex !== -1) {
-        combined[existingIndex] = { ...combined[existingIndex], ...resolvedItem };
-      } else {
-        combined.push(resolvedItem);
-      }
-    }
-
-    if (combined.length === 0) {
-      for (const item of FALLBACK_CATEGORIES) {
-        const mod = modifiedMap[item.id] || modifiedMap[item.slug] || modifiedMap[item.name.toLowerCase()];
-        const resolvedItem = mod ? { ...item, ...mod } : item;
-        if (!combined.some(c => c.id === resolvedItem.id || c.slug === resolvedItem.slug)) {
-          combined.push(resolvedItem);
-        }
-      }
+    if (localCats.length > 0) {
+      combined = [...localCats];
+    } else {
+      combined = [...FALLBACK_CATEGORIES];
     }
   }
 
-  // Strictly filter out any deleted categories
+  // Filter out any locally deleted categories if database deletion hasn't propagated
   combined = combined.filter(c => 
     !deletedCatSet.has(c.id) && 
     !deletedCatSet.has(c.slug) &&
@@ -1909,15 +1886,41 @@ export async function deleteAdminCategory(id: string): Promise<void> {
 // ==============================================================================
 
 /**
- * Fetch all reader inbox messages
+ * Fetch all reader inbox messages directly from the database
  */
 export async function fetchAdminMessages(): Promise<Message[]> {
   const deletedSet = getDeletedMessageIds();
   const readSet = getReadMessageIds();
   const token = getAdminToken();
-  const allMap = new Map<string, Message>();
 
-  // 1. Query server backend API (persisted in data/db.json)
+  // 1. Fetch directly from Supabase database as the primary source of truth across all platforms
+  try {
+    const { data, error } = await supabase
+      .from('messages')
+      .select('*, message_replies(*)')
+      .order('created_at', { ascending: false });
+
+    if (!error && data && Array.isArray(data)) {
+      const dbList: Message[] = [];
+      for (const raw of data) {
+        const mapped = mapMessageFromDb(raw);
+        // Persist read state: if database says read is true OR marked read locally
+        if (readSet.has(mapped.id)) {
+          mapped.read = true;
+        }
+        if (!deletedSet.has(mapped.id)) {
+          dbList.push(mapped);
+        }
+      }
+      dbList.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      return dbList;
+    }
+  } catch (err) {
+    console.warn('Supabase fetch messages error, trying fallback:', err);
+  }
+
+  // 2. Query server backend API if Supabase query failed or returned no data
+  const allMap = new Map<string, Message>();
   try {
     const res = await fetch('/api/admin/messages', {
       headers: token ? { 'Authorization': `Bearer ${token}` } : {}
@@ -1939,36 +1942,16 @@ export async function fetchAdminMessages(): Promise<Message[]> {
     console.warn('Could not fetch messages from server API:', err);
   }
 
-  // 2. Query Supabase messages table if connected
-  try {
-    const { data, error } = await supabase
-      .from('messages')
-      .select('*, message_replies(*)')
-      .order('created_at', { ascending: false });
-
-    if (!error && data && Array.isArray(data)) {
-      for (const raw of data) {
-        const mapped = mapMessageFromDb(raw);
-        if (readSet.has(mapped.id)) {
-          mapped.read = true;
-        }
-        if (!deletedSet.has(mapped.id) && !allMap.has(mapped.id)) {
-          allMap.set(mapped.id, mapped);
-        }
+  // 3. Fallback to local messages cache if both database and server returned nothing
+  if (allMap.size === 0) {
+    const localList = getLocalMessages();
+    for (const msg of localList) {
+      if (readSet.has(msg.id)) {
+        msg.read = true;
       }
-    }
-  } catch (err) {
-    console.warn('Supabase fetch messages error:', err);
-  }
-
-  // 3. Include local messages cache
-  const localList = getLocalMessages();
-  for (const msg of localList) {
-    if (readSet.has(msg.id)) {
-      msg.read = true;
-    }
-    if (!deletedSet.has(msg.id) && !allMap.has(msg.id)) {
-      allMap.set(msg.id, msg);
+      if (!deletedSet.has(msg.id) && !allMap.has(msg.id)) {
+        allMap.set(msg.id, msg);
+      }
     }
   }
 
