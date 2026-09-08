@@ -460,20 +460,17 @@ export async function fetchPublishedArticles(params?: { category?: string; searc
     // Graceful fallback
   }
 
-  const localArticles = getLocalArticles().filter(a => a.status === 'published');
-  let combined = [...dbArticles];
-
-  for (const item of localArticles) {
-    if (!combined.some(a => a.id === item.id || a.slug === item.slug)) {
-      combined.push(item);
-    }
-  }
-
-  if (combined.length === 0) {
-    for (const item of FALLBACK_ARTICLES.filter(a => a.status === 'published')) {
-      if (!combined.some(a => a.id === item.id || a.slug === item.slug)) {
-        combined.push(item);
-      }
+  // If Supabase returned published articles, use them as the primary source of truth!
+  // Only use local storage articles if Supabase returned 0 items (e.g. offline fallback)
+  let combined: Article[] = [];
+  if (dbArticles.length > 0) {
+    combined = [...dbArticles];
+  } else {
+    const localArticles = getLocalArticles().filter(a => a.status === 'published');
+    if (localArticles.length > 0) {
+      combined = [...localArticles];
+    } else {
+      combined = [...FALLBACK_ARTICLES.filter(a => a.status === 'published')];
     }
   }
 
@@ -1138,20 +1135,16 @@ export async function fetchAdminArticles(): Promise<Article[]> {
     // ignore
   }
 
-  const localArticles = getLocalArticles();
-  let combined = [...dbArticles];
-
-  for (const item of localArticles) {
-    if (!combined.some(a => a.id === item.id || a.slug === item.slug)) {
-      combined.push(item);
-    }
-  }
-
-  if (combined.length === 0) {
-    for (const item of FALLBACK_ARTICLES) {
-      if (!combined.some(a => a.id === item.id || a.slug === item.slug)) {
-        combined.push(item);
-      }
+  // If Supabase returned articles, prioritize them as the cloud source of truth
+  let combined: Article[] = [];
+  if (dbArticles.length > 0) {
+    combined = [...dbArticles];
+  } else {
+    const localArticles = getLocalArticles();
+    if (localArticles.length > 0) {
+      combined = [...localArticles];
+    } else {
+      combined = [...FALLBACK_ARTICLES];
     }
   }
 
@@ -1285,7 +1278,12 @@ insertData.category_id = categoryId;
       .select('*, categories(id, name, slug)')
       .single();
 
-    if (!error && data) {
+    if (error) {
+      console.error('Supabase article insert error:', error);
+      throw new Error(`Failed to publish article to database: ${error.message}`);
+    }
+
+    if (data) {
       const mapped = mapArticleFromDb(data);
       const locals = getLocalArticles().filter(a => a.slug !== mapped.slug && a.id !== mapped.id);
       locals.unshift(mapped);
@@ -1294,8 +1292,9 @@ insertData.category_id = categoryId;
       broadcastArticlesChanged('article:created');
       return mapped;
     }
-  } catch (err) {
-    console.warn('Error saving to Supabase, saved to server & local cache:', err);
+  } catch (err: any) {
+    console.error('Error saving to Supabase:', err);
+    throw err;
   }
 
   // Local persistence fallback
@@ -1368,14 +1367,23 @@ export async function updateAdminArticle(id: string, article: Partial<Article>):
         .select('*, categories(id, name, slug)')
         .single();
 
-      if (!error && data) {
+      if (error) {
+        console.error('Supabase article update error:', error);
+        throw new Error(`Failed to update article in database: ${error.message}`);
+      }
+
+      if (data) {
         const mapped = mapArticleFromDb(data);
+        const locals = getLocalArticles().filter(a => a.id !== mapped.id && a.slug !== mapped.slug);
+        locals.unshift(mapped);
+        saveLocalArticles(locals);
         syncArticleToServer('upsert', mapped);
         broadcastArticlesChanged('article:updated');
         return mapped;
       }
-    } catch (err) {
-      console.warn('Update in Supabase failed, using local update:', err);
+    } catch (err: any) {
+      console.error('Update in Supabase error:', err);
+      throw err;
     }
   }
 
@@ -1500,13 +1508,17 @@ export async function deleteAdminArticle(id: string): Promise<void> {
   }
 
   try {
+    let deleteResult: any = null;
     if (isValidUuid(id)) {
-      await supabase.from('articles').delete().eq('id', id);
+      deleteResult = await supabase.from('articles').delete().eq('id', id);
     } else {
-      await supabase.from('articles').delete().eq('slug', id);
+      deleteResult = await supabase.from('articles').delete().eq('slug', id);
+    }
+    if (deleteResult?.error) {
+      console.error('Delete in Supabase error:', deleteResult.error);
     }
   } catch (err) {
-    console.warn('Delete in Supabase handled gracefully:', err);
+    console.error('Delete in Supabase failed:', err);
   }
 
   // Broadcast real-time deletion event across app
