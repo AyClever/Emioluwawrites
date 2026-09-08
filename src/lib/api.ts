@@ -417,6 +417,7 @@ export function removeAdminToken(): void {
  */
 export async function fetchPublishedArticles(params?: { category?: string; search?: string; limit?: number }): Promise<Article[]> {
   const deletedSet = getDeletedArticleIds();
+  // Fetch directly from the Supabase database
   let dbArticles: Article[] = [];
   try {
     let query = supabase
@@ -439,38 +440,35 @@ export async function fetchPublishedArticles(params?: { category?: string; searc
       dbArticles = data.map(mapArticleFromDb);
     }
   } catch (err) {
-    console.warn('Error fetching articles from Supabase:', err);
+    console.warn('Error fetching articles directly from Supabase:', err);
   }
 
-  // Also fetch from server API to guarantee cross-device updates
-  try {
-    const serverUrl = '/api/articles' + (params?.category && params.category !== 'All' ? `?category=${encodeURIComponent(params.category)}` : '');
-    const serverRes = await fetch(serverUrl);
-    if (serverRes.ok) {
-      const serverArticles: Article[] = await serverRes.json();
-      if (Array.isArray(serverArticles)) {
-        for (const item of serverArticles) {
-          if (!dbArticles.some(a => a.id === item.id || a.slug === item.slug)) {
-            dbArticles.push(item);
-          }
-        }
-      }
-    }
-  } catch (err) {
-    // Graceful fallback
-  }
-
-  // If Supabase returned published articles, use them as the primary source of truth!
-  // Only use local storage articles if Supabase returned 0 items (e.g. offline fallback)
+  // If Supabase returned database records, use them directly as source of truth
   let combined: Article[] = [];
   if (dbArticles.length > 0) {
     combined = [...dbArticles];
   } else {
-    const localArticles = getLocalArticles().filter(a => a.status === 'published');
-    if (localArticles.length > 0) {
-      combined = [...localArticles];
-    } else {
-      combined = [...FALLBACK_ARTICLES.filter(a => a.status === 'published')];
+    // Only query fallback sources if Supabase database query returned 0 items
+    try {
+      const serverUrl = '/api/articles' + (params?.category && params.category !== 'All' ? `?category=${encodeURIComponent(params.category)}` : '');
+      const serverRes = await fetch(serverUrl);
+      if (serverRes.ok) {
+        const serverArticles: Article[] = await serverRes.json();
+        if (Array.isArray(serverArticles) && serverArticles.length > 0) {
+          combined = serverArticles.filter(a => a.status === 'published');
+        }
+      }
+    } catch {
+      // Ignore
+    }
+
+    if (combined.length === 0) {
+      const localArticles = getLocalArticles().filter(a => a.status === 'published');
+      if (localArticles.length > 0) {
+        combined = [...localArticles];
+      } else {
+        combined = [...FALLBACK_ARTICLES.filter(a => a.status === 'published')];
+      }
     }
   }
 
@@ -648,27 +646,31 @@ export async function fetchCategories(): Promise<Category[]> {
     return cat;
   });
 
-  const localCats = getLocalCategories();
-  let combined = [...dbCats];
-
-  for (const item of localCats) {
-    const mod = modifiedMap[item.id] || modifiedMap[item.slug] || modifiedMap[item.name.toLowerCase()];
-    const resolvedItem = mod ? { ...item, ...mod } : item;
-    const existingIndex = combined.findIndex(c => c.id === resolvedItem.id || c.slug === resolvedItem.slug);
-
-    if (existingIndex !== -1) {
-      combined[existingIndex] = { ...combined[existingIndex], ...resolvedItem };
-    } else {
-      combined.push(resolvedItem);
-    }
-  }
-
-  if (combined.length === 0) {
-    for (const item of FALLBACK_CATEGORIES) {
+  let combined: Category[] = [];
+  if (dbCats.length > 0) {
+    combined = [...dbCats];
+  } else {
+    // Fallback only if database returned 0 categories
+    const localCats = getLocalCategories();
+    for (const item of localCats) {
       const mod = modifiedMap[item.id] || modifiedMap[item.slug] || modifiedMap[item.name.toLowerCase()];
       const resolvedItem = mod ? { ...item, ...mod } : item;
-      if (!combined.some(c => c.id === resolvedItem.id || c.slug === resolvedItem.slug)) {
+      const existingIndex = combined.findIndex(c => c.id === resolvedItem.id || c.slug === resolvedItem.slug);
+
+      if (existingIndex !== -1) {
+        combined[existingIndex] = { ...combined[existingIndex], ...resolvedItem };
+      } else {
         combined.push(resolvedItem);
+      }
+    }
+
+    if (combined.length === 0) {
+      for (const item of FALLBACK_CATEGORIES) {
+        const mod = modifiedMap[item.id] || modifiedMap[item.slug] || modifiedMap[item.name.toLowerCase()];
+        const resolvedItem = mod ? { ...item, ...mod } : item;
+        if (!combined.some(c => c.id === resolvedItem.id || c.slug === resolvedItem.slug)) {
+          combined.push(resolvedItem);
+        }
       }
     }
   }
@@ -1118,33 +1120,31 @@ export async function fetchAdminArticles(): Promise<Article[]> {
     console.warn('Could not fetch admin articles from Supabase:', err);
   }
 
-  // Also query server database to ensure newly created or synced articles are visible
-  try {
-    const serverRes = await fetch('/api/articles');
-    if (serverRes.ok) {
-      const serverArticles: Article[] = await serverRes.json();
-      if (Array.isArray(serverArticles)) {
-        for (const item of serverArticles) {
-          if (!dbArticles.some(a => a.id === item.id || a.slug === item.slug)) {
-            dbArticles.push(item);
-          }
-        }
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  // If Supabase returned articles, prioritize them as the cloud source of truth
+  // If Supabase returned database records, use them directly as source of truth
   let combined: Article[] = [];
   if (dbArticles.length > 0) {
     combined = [...dbArticles];
   } else {
-    const localArticles = getLocalArticles();
-    if (localArticles.length > 0) {
-      combined = [...localArticles];
-    } else {
-      combined = [...FALLBACK_ARTICLES];
+    // Only query server API or local storage if Supabase returned 0 items
+    try {
+      const serverRes = await fetch('/api/articles');
+      if (serverRes.ok) {
+        const serverArticles: Article[] = await serverRes.json();
+        if (Array.isArray(serverArticles) && serverArticles.length > 0) {
+          combined = serverArticles;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    if (combined.length === 0) {
+      const localArticles = getLocalArticles();
+      if (localArticles.length > 0) {
+        combined = [...localArticles];
+      } else {
+        combined = [...FALLBACK_ARTICLES];
+      }
     }
   }
 
