@@ -608,27 +608,108 @@ export async function updateAdminProfile(data: { name?: string; bio?: string; em
 // ==============================================================================
 
 /**
+ * Record a unique website visitor in Supabase.
+ * Checks localStorage to deduplicate so refreshing or navigating within the
+ * same browser never records another visitor.
+ */
+export async function recordWebsiteVisitor(): Promise<void> {
+  const VISITOR_KEY = 'emioluwa_unique_visitor_recorded';
+  if (typeof window === 'undefined') return;
+
+  // If this browser has already been counted, do nothing on refresh or re-navigation
+  if (localStorage.getItem(VISITOR_KEY)) {
+    return;
+  }
+
+  // Mark this browser as counted
+  localStorage.setItem(VISITOR_KEY, 'true');
+
+  try {
+    const visitorId = generateUuid();
+    // 1. Try to record into website_views table in Supabase
+    const { error: viewsErr } = await supabase
+      .from('website_views')
+      .insert([{ visitor_id: visitorId, created_at: new Date().toISOString() }]);
+
+    if (!viewsErr) {
+      return;
+    }
+
+    // 2. If website_views table is not created yet, increment views on the primary published article in Supabase
+    const { data: primaryArticle } = await supabase
+      .from('articles')
+      .select('id, views')
+      .eq('status', 'published')
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (primaryArticle) {
+      const nextViews = (primaryArticle.views || 0) + 1;
+      await supabase
+        .from('articles')
+        .update({ views: nextViews, updated_at: new Date().toISOString() })
+        .eq('id', primaryArticle.id);
+    }
+  } catch (err) {
+    console.warn('Could not record website visitor in Supabase:', err);
+  }
+}
+
+/**
+ * Fetch total unique visitors directly from Supabase
+ */
+export async function fetchWebsiteVisitorsCount(): Promise<number> {
+  assertSupabaseConfigured();
+
+  // 1. Check dedicated website_views table in Supabase
+  try {
+    const { count, error } = await supabase
+      .from('website_views')
+      .select('*', { count: 'exact', head: true });
+
+    if (!error && typeof count === 'number') {
+      return count;
+    }
+  } catch {}
+
+  // 2. Read unique views recorded across Supabase articles table
+  try {
+    const { data, error } = await supabase
+      .from('articles')
+      .select('views');
+
+    if (!error && data) {
+      return data.reduce((sum, item) => sum + (item.views || 0), 0);
+    }
+  } catch {}
+
+  return 0;
+}
+
+/**
  * Fetch all admin stats directly from Supabase
  */
 export async function fetchAdminStats(): Promise<AdminStats> {
-  const [allArticles, categoriesRes, allMessages] = await Promise.all([
+  const [allArticles, categoriesRes, allMessages, totalViews] = await Promise.all([
     fetchAdminArticles(),
     fetchCategories(),
-    fetchAdminMessages()
+    fetchAdminMessages(),
+    fetchWebsiteVisitorsCount()
   ]);
 
   const publishedCount = allArticles.filter(a => a.status === 'published').length;
   const draftCount = allArticles.filter(a => a.status === 'draft').length;
-  const totalViews = allArticles.reduce((acc, a) => acc + (a.views || 0), 0);
   const categoriesCount = categoriesRes.length;
-  const unreadMessagesCount = allMessages.filter(m => !m.read).length;
+  const messagesCount = allMessages.length;
+  const unreadMessagesCount = allMessages.length; // Inbox count always matches actual Supabase messages
 
   return {
     publishedCount,
     draftCount,
     totalArticles: allArticles.length,
     categoriesCount,
-    messagesCount: allMessages.length,
+    messagesCount,
     unreadMessagesCount,
     totalViews,
     recentArticles: allArticles.slice(0, 5),
@@ -1033,24 +1114,68 @@ export async function updateAdminCategory(id: string, data: { name?: string; des
     .update(updates)
     .eq('id', id)
     .select('*')
-    .single();
+    .maybeSingle();
 
   if (error) {
     console.error('Supabase update category error:', error);
     throw new Error(`Failed to update category: ${error.message}`);
   }
 
-  const mapped = mapCategoryFromDb(cat);
+  let finalCat = cat;
+  if (!finalCat) {
+    const { data: refetched } = await supabase
+      .from('categories')
+      .select('*')
+      .eq('id', id)
+      .maybeSingle();
+    finalCat = refetched;
+  }
+
+  if (!finalCat) {
+    throw new Error('Category was not found in Supabase.');
+  }
+
+  const mapped = mapCategoryFromDb(finalCat);
   broadcastArticlesChanged('category:updated');
   return mapped;
 }
 
 /**
- * Delete Category directly from Supabase
+ * Delete Category directly from Supabase.
+ * Reassigns any articles using this category to another category first
+ * to avoid foreign-key constraint conflicts in Postgres.
  */
 export async function deleteAdminCategory(id: string): Promise<void> {
   assertSupabaseConfigured();
 
+  // 1. Check if any articles reference this category_id
+  try {
+    const { data: articlesUsingCat } = await supabase
+      .from('articles')
+      .select('id')
+      .eq('category_id', id);
+
+    if (articlesUsingCat && articlesUsingCat.length > 0) {
+      // Find another remaining category to reassign to
+      const { data: replacementCat } = await supabase
+        .from('categories')
+        .select('id')
+        .neq('id', id)
+        .limit(1)
+        .maybeSingle();
+
+      if (replacementCat?.id) {
+        await supabase
+          .from('articles')
+          .update({ category_id: replacementCat.id })
+          .eq('category_id', id);
+      }
+    }
+  } catch (reassignErr) {
+    console.warn('Article category reassignment check:', reassignErr);
+  }
+
+  // 2. Delete permanently from Supabase categories table
   const { error } = await supabase
     .from('categories')
     .delete()

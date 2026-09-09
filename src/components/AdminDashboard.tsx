@@ -422,35 +422,36 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
   };
 
   // Messages Handlers
-  const handleToggleMessageRead = async (msg: Message, e?: React.MouseEvent) => {
+  // "Mark Read" permanently deletes that message from the Supabase messages table and immediately removes it from the Inbox
+  const handleMarkRead = async (msg: Message, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     try {
-      const newStatus = !msg.read;
-      // Optimistic update: mark read status immediately
-      const updated = { ...msg, read: newStatus };
-      setMessages(prev => prev.map(m => m.id === msg.id ? updated : m));
-
-      // If marking read from the Reader Inbox view, immediately clear the detail pane
-      if (newStatus && selectedMessage?.id === msg.id && messageFilter === 'inbox') {
+      // Optimistically remove from UI immediately
+      setMessages(prev => prev.filter(m => m.id !== msg.id));
+      if (selectedMessage?.id === msg.id) {
         setSelectedMessage(null);
-      } else if (selectedMessage?.id === msg.id) {
-        setSelectedMessage(updated);
       }
-
-      // Update unread count in stats optimistically
       setStats(prev => prev ? {
         ...prev,
-        unreadMessagesCount: Math.max(0, prev.unreadMessagesCount + (newStatus ? -1 : 1))
+        messagesCount: Math.max(0, prev.messagesCount - 1),
+        unreadMessagesCount: Math.max(0, prev.unreadMessagesCount - 1)
       } : prev);
 
-      // Persist to Supabase and database
-      const saved = await toggleMessageRead(msg.id, newStatus);
-      setMessages(prev => prev.map(m => m.id === msg.id ? saved : m));
-      if (selectedMessage?.id === msg.id && (!newStatus || messageFilter !== 'inbox')) {
-        setSelectedMessage(saved);
-      }
-    } catch (err) {
-      console.error('Failed to toggle read status in Supabase/database:', err);
+      // Permanently delete from Supabase messages table
+      await deleteAdminMessage(msg.id);
+
+      // Refresh data from Supabase so count always matches actual messages
+      const fresh = await fetchAdminMessages();
+      setMessages(fresh);
+      setStats(prev => prev ? {
+        ...prev,
+        messagesCount: fresh.length,
+        unreadMessagesCount: fresh.length
+      } : prev);
+    } catch (err: any) {
+      console.error('Failed to mark message as read / delete from Supabase:', err);
+      alert(err.message || 'Failed to remove message from Supabase');
+      await loadAllData();
     }
   };
 
@@ -487,14 +488,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
       if (selectedMessage?.id === targetId) {
         setSelectedMessage(null);
       }
+      setStats(prev => prev ? {
+        ...prev,
+        messagesCount: Math.max(0, prev.messagesCount - 1),
+        unreadMessagesCount: Math.max(0, prev.unreadMessagesCount - 1)
+      } : prev);
+
       const toDelete = messageToDelete;
       setMessageToDelete(null);
 
-      // Permanently delete the message from Supabase and database
+      // Permanently delete the message from Supabase
       await deleteAdminMessage(toDelete.id);
+
+      // Refresh from Supabase to keep count 100% synchronized
+      const fresh = await fetchAdminMessages();
+      setMessages(fresh);
+      setStats(prev => prev ? {
+        ...prev,
+        messagesCount: fresh.length,
+        unreadMessagesCount: fresh.length
+      } : prev);
+    } catch (err: any) {
+      console.error('Failed to permanently delete message from Supabase:', err);
+      alert(err.message || 'Failed to delete message from Supabase');
       await loadAllData();
-    } catch (err) {
-      console.error('Failed to permanently delete message:', err);
     } finally {
       setDeletingMessage(false);
     }
@@ -737,22 +754,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
                   <Mail className="w-4 h-4 text-[#C29B38]" />
                 </div>
                 <div className="text-3xl font-serif font-bold text-[#0D3B2E]">
-                  {stats?.messagesCount || 0}
+                  {messages.length}
                 </div>
                 <p className="text-[11px] text-[#57615D]">
-                  <strong className="text-emerald-700">{stats?.unreadMessagesCount || 0}</strong> unread
+                  <strong className="text-emerald-700">{messages.length}</strong> in Supabase inbox
                 </p>
               </div>
 
               <div className="paper-card p-5 rounded-2xl border border-[#E8DEC8] space-y-2">
                 <div className="flex items-center justify-between text-[#786D5F]">
-                  <span className="text-xs font-semibold uppercase tracking-wider">Total Views</span>
+                  <span className="text-xs font-semibold uppercase tracking-wider">Website Views</span>
                   <Eye className="w-4 h-4 text-[#0D3B2E]" />
                 </div>
                 <div className="text-3xl font-serif font-bold text-[#0D3B2E]">
                   {stats?.totalViews || 0}
                 </div>
-                <p className="text-[11px] text-[#57615D]">Across published essays</p>
+                <p className="text-[11px] text-[#57615D]">Unique visitors from Supabase</p>
               </div>
 
             </div>
@@ -1603,38 +1620,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
                 </p>
               </div>
 
-              {/* Filter Pills */}
+              {/* Filter / Count Header */}
               <div className="flex items-center gap-2">
-                <button
-                  id="filter-inbox-unread"
-                  type="button"
-                  onClick={() => {
-                    setMessageFilter('inbox');
-                    setSelectedMessage(null);
-                  }}
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all ${
-                    messageFilter === 'inbox'
-                      ? 'bg-[#0D3B2E] text-[#FAF7F2] shadow-xs'
-                      : 'bg-[#FAF7F2] border border-[#D6C8B0] text-[#4E5754] hover:bg-[#F3EDE2]'
-                  }`}
+                <div
+                  id="filter-inbox-all"
+                  className="px-4 py-1.5 rounded-full text-xs font-semibold bg-[#0D3B2E] text-[#FAF7F2] shadow-xs"
                 >
-                  Inbox ({messages.filter(m => !m.read).length})
-                </button>
-                <button
-                  id="filter-inbox-archived"
-                  type="button"
-                  onClick={() => {
-                    setMessageFilter('archived');
-                    setSelectedMessage(null);
-                  }}
-                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all ${
-                    messageFilter === 'archived'
-                      ? 'bg-[#0D3B2E] text-[#FAF7F2] shadow-xs'
-                      : 'bg-[#FAF7F2] border border-[#D6C8B0] text-[#4E5754] hover:bg-[#F3EDE2]'
-                  }`}
-                >
-                  Archived / Read ({messages.filter(m => m.read).length})
-                </button>
+                  Inbox ({messages.length})
+                </div>
               </div>
             </div>
 
@@ -1643,21 +1636,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
               
               {/* Message List */}
               <div className="lg:col-span-5 space-y-3">
-                {messages.filter(m => messageFilter === 'inbox' ? !m.read : m.read).length === 0 ? (
+                {messages.length === 0 ? (
                   <div className="paper-card p-8 rounded-2xl text-center text-xs text-[#786D5F] space-y-2">
                     <CheckCircle className="w-8 h-8 text-[#C29B38] mx-auto opacity-70" />
                     <p className="font-semibold text-[#0D3B2E]">
-                      {messageFilter === 'inbox' ? 'Your Reader Inbox is clear!' : 'No archived messages.'}
+                      Your Reader Inbox is clear!
                     </p>
                     <p className="text-[11px]">
-                      {messageFilter === 'inbox'
-                        ? 'All reader messages and notes have been read.'
-                        : 'Messages marked as read will appear here.'}
+                      No reader messages in the database. New contact notes will appear here.
                     </p>
                   </div>
                 ) : (
                   messages
-                    .filter(m => messageFilter === 'inbox' ? !m.read : m.read)
+                    .filter(m => !messageSearch || 
+                      m.name.toLowerCase().includes(messageSearch.toLowerCase()) ||
+                      m.email.toLowerCase().includes(messageSearch.toLowerCase()) ||
+                      (m.subject && m.subject.toLowerCase().includes(messageSearch.toLowerCase())) ||
+                      m.message.toLowerCase().includes(messageSearch.toLowerCase())
+                    )
                     .map((msg) => (
                       <div
                         key={msg.id}
@@ -1666,14 +1662,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
                         className={`paper-card p-4 rounded-2xl cursor-pointer border transition-all space-y-2.5 ${
                           selectedMessage?.id === msg.id
                             ? 'border-[#0D3B2E] bg-[#FFFDF9] shadow-sm ring-1 ring-[#0D3B2E]/20'
-                            : !msg.read
-                            ? 'border-[#C29B38] bg-[#FDFBF7]'
-                            : 'border-[#E8DEC8] bg-[#FAF7F2] opacity-90 hover:opacity-100'
+                            : 'border-[#E8DEC8] bg-[#FDFBF7] hover:border-[#C29B38]'
                         }`}
                       >
                         <div className="flex items-center justify-between text-xs">
                           <div className="flex items-center gap-2">
-                            <span className={`w-2.5 h-2.5 rounded-full ${!msg.read ? 'bg-emerald-600 animate-pulse' : 'bg-transparent border border-[#786D5F]/40'}`} />
+                            <span className="w-2.5 h-2.5 rounded-full bg-emerald-600" />
                             <span className="font-serif font-bold text-[#0D3B2E]">{msg.name}</span>
                           </div>
                           <span className="text-[11px] text-[#786D5F]">
@@ -1702,26 +1696,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
                         <div className="flex items-center justify-between pt-2 border-t border-[#EFE8DA] text-xs">
                           <button
                             type="button"
-                            id={`btn-toggle-read-${msg.id}`}
-                            onClick={(e) => handleToggleMessageRead(msg, e)}
-                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
-                              msg.read
-                                ? 'bg-[#FAF7F2] text-[#57615D] hover:bg-[#EFE8DA] border border-[#D6C8B0]'
-                                : 'bg-[#0D3B2E] text-[#FAF7F2] hover:bg-[#135241]'
-                            }`}
-                            title={msg.read ? 'Move back to Reader Inbox' : 'Mark as read and remove from inbox'}
+                            id={`btn-mark-read-${msg.id}`}
+                            onClick={(e) => handleMarkRead(msg, e)}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-[#0D3B2E] text-[#FAF7F2] hover:bg-[#135241] transition-colors"
+                            title="Mark Read and permanently delete from Inbox"
                           >
-                            {msg.read ? (
-                              <>
-                                <Mail className="w-3 h-3 text-[#786D5F]" />
-                                <span>Move to Inbox</span>
-                              </>
-                            ) : (
-                              <>
-                                <CheckCircle className="w-3 h-3 text-[#E4CA7E]" />
-                                <span>Mark Read</span>
-                              </>
-                            )}
+                            <CheckCircle className="w-3 h-3 text-[#E4CA7E]" />
+                            <span>Mark Read</span>
                           </button>
 
                           <button
@@ -1769,27 +1750,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
 
                       <div className="flex items-center gap-2">
                         <button
-                          id="btn-detail-toggle-read"
+                          id="btn-detail-mark-read"
                           type="button"
-                          onClick={(e) => handleToggleMessageRead(selectedMessage, e)}
-                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold shadow-xs transition-colors ${
-                            selectedMessage.read
-                              ? 'bg-[#FAF7F2] text-[#0D3B2E] border border-[#D6C8B0] hover:bg-[#EFE8DA]'
-                              : 'bg-[#0D3B2E] text-[#FAF7F2] hover:bg-[#135241]'
-                          }`}
-                          title={selectedMessage.read ? 'Move back to Reader Inbox' : 'Mark as read and remove from inbox'}
+                          onClick={(e) => handleMarkRead(selectedMessage, e)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold shadow-xs bg-[#0D3B2E] text-[#FAF7F2] hover:bg-[#135241] transition-colors"
+                          title="Mark Read and permanently delete from Inbox"
                         >
-                          {selectedMessage.read ? (
-                            <>
-                              <Mail className="w-3.5 h-3.5 text-[#0D3B2E]" />
-                              <span>Move to Inbox</span>
-                            </>
-                          ) : (
-                            <>
-                              <CheckCircle className="w-3.5 h-3.5 text-[#E4CA7E]" />
-                              <span>Mark Read</span>
-                            </>
-                          )}
+                          <CheckCircle className="w-3.5 h-3.5 text-[#E4CA7E]" />
+                          <span>Mark Read</span>
                         </button>
 
                         <button

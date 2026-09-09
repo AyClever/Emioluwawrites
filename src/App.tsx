@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ViewRoute, AdminUser } from './types';
-import { fetchAdminMe, removeAdminToken } from './lib/api';
+import { fetchAdminMe, removeAdminToken, recordWebsiteVisitor } from './lib/api';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { HomePage } from './components/HomePage';
@@ -89,6 +89,13 @@ export default function App() {
 
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  // Record unique website visitor in Supabase when visiting the public website for the first time
+  useEffect(() => {
+    if (currentRoute.type !== 'admin_login' && currentRoute.type !== 'admin_dashboard') {
+      recordWebsiteVisitor();
+    }
+  }, [currentRoute.type]);
 
   // Custom Navigation function that updates history
   const navigate = (route: ViewRoute) => {
