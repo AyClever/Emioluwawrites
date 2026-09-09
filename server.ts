@@ -259,16 +259,23 @@ app.post('/api/auth/login', (req, res) => {
   }
 
   const cleanEmail = email.toLowerCase().trim();
+  const cleanPass = (password || '').trim();
 
-  // Strict check: Only Emioluwa's email has admin access (emioluwawrites@gmail.com)
-  if (cleanEmail !== 'emioluwawrites@gmail.com' && cleanEmail !== 'lifeofgod2912@gmail.com') {
+  // Strict check: Authorized author emails
+  const allowedEmails = [
+    'emioluwawrites@gmail.com',
+    'lifeofgod2912@gmail.com',
+    'fayoseayomipo18@gmail.com'
+  ];
+
+  if (!allowedEmails.includes(cleanEmail)) {
     return res.status(401).json({ error: 'Access denied. Readers do not have access to the admin portal.' });
   }
 
   const db = getDatabase();
   const admin = db.admin;
 
-  const isValidPassword = (password === 'Emioluwa2912') || (admin?.passwordHash && bcrypt.compareSync(password, admin.passwordHash));
+  const isValidPassword = (cleanPass === 'Emioluwa2912') || (admin?.passwordHash && bcrypt.compareSync(cleanPass, admin.passwordHash));
   if (!isValidPassword) {
     return res.status(401).json({ error: 'Invalid email or password' });
   }

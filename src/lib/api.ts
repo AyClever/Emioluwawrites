@@ -403,10 +403,17 @@ export async function submitSayHello(data: { name: string; email: string; messag
  */
 export async function loginAdmin(email: string, password: string): Promise<{ success: boolean; token: string; admin: AdminUser }> {
   const cleanEmail = email.trim().toLowerCase();
+  const cleanPass = password.trim();
 
-  // Strict check: Only authorized author email allowed
-  if (cleanEmail !== 'emioluwawrites@gmail.com' && cleanEmail !== 'lifeofgod2912@gmail.com') {
-    throw new Error('Access denied. Readers do not have access to the Admin Portal.');
+  // Strict check: Only authorized author emails allowed
+  const allowedEmails = [
+    'emioluwawrites@gmail.com',
+    'lifeofgod2912@gmail.com',
+    'fayoseayomipo18@gmail.com'
+  ];
+
+  if (!allowedEmails.includes(cleanEmail)) {
+    throw new Error('Access denied. Readers do not have access to the Admin Portal. Please use the author email.');
   }
 
   // 1. Try Supabase auth first
@@ -414,7 +421,7 @@ export async function loginAdmin(email: string, password: string): Promise<{ suc
     try {
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
         email: cleanEmail,
-        password
+        password: cleanPass
       });
 
       if (!authError && authData.session) {
@@ -448,12 +455,28 @@ export async function loginAdmin(email: string, password: string): Promise<{ suc
     }
   }
 
-  // 2. Fallback to server auth check
+  // 2. Author password verification
+  if (cleanPass === 'Emioluwa2912') {
+    const directToken = `admin-session-${Date.now()}`;
+    setAdminToken(directToken);
+    return {
+      success: true,
+      token: directToken,
+      admin: {
+        id: 'admin-1',
+        email: cleanEmail,
+        name: 'Emioluwa',
+        bio: 'Young Nigerian writer, essayist, and student crafting words that connect and stories that stay.'
+      }
+    };
+  }
+
+  // 3. Fallback to server auth check
   try {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: cleanEmail, password })
+      body: JSON.stringify({ email: cleanEmail, password: cleanPass })
     });
 
     if (res.ok) {
@@ -465,7 +488,7 @@ export async function loginAdmin(email: string, password: string): Promise<{ suc
           token: data.token,
           admin: data.admin || {
             id: 'admin-1',
-            email: 'emioluwawrites@gmail.com',
+            email: cleanEmail,
             name: 'Emioluwa',
             bio: 'Young Nigerian writer, essayist, and student crafting words that connect and stories that stay.'
           }
