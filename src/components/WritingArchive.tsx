@@ -26,6 +26,7 @@ export const WritingArchive: React.FC<WritingArchiveProps> = ({ initialCategory,
   const [searchQuery, setSearchQuery] = useState<string>(initialSearch || '');
   const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'readTime'>('newest');
   const [loading, setLoading] = useState<boolean>(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Sync category if passed via prop
   useEffect(() => {
@@ -37,14 +38,16 @@ export const WritingArchive: React.FC<WritingArchiveProps> = ({ initialCategory,
   useEffect(() => {
     async function loadData() {
       try {
+        setErrorMessage(null);
         const [articlesData, categoriesData] = await Promise.all([
           fetchPublishedArticles(),
           fetchCategories()
         ]);
         setArticles(articlesData);
         setCategories(categoriesData);
-      } catch (err) {
-        console.error('Error fetching writing archive:', err);
+      } catch (err: any) {
+        console.error('Error fetching writing archive from Supabase:', err);
+        setErrorMessage(err.message || 'Unable to connect to the database.');
       } finally {
         setLoading(false);
       }
@@ -230,8 +233,18 @@ export const WritingArchive: React.FC<WritingArchiveProps> = ({ initialCategory,
           </div>
         )}
 
-        {/* Loading State */}
-        {loading ? (
+        {/* Loading / Error / Content State */}
+        {errorMessage ? (
+          <div className="paper-card rounded-2xl p-8 text-center max-w-lg mx-auto border border-amber-200 bg-amber-50/60 space-y-3">
+            <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center mx-auto text-amber-800">
+              <Feather className="w-5 h-5 text-amber-700" />
+            </div>
+            <h3 className="font-serif text-lg font-bold text-[#0D3B2E]">Database Connection Issue</h3>
+            <p className="font-sans text-xs text-[#57615D]">
+              {errorMessage}
+            </p>
+          </div>
+        ) : loading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
             {[1, 2, 3, 4, 5, 6].map((i) => (
               <div key={i} className="paper-card rounded-2xl p-6 animate-pulse space-y-4">

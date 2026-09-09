@@ -34,18 +34,21 @@ export const HomePage: React.FC<HomePageProps> = ({ navigate }) => {
   const [featuredArticles, setFeaturedArticles] = useState<Article[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadData() {
       try {
+        setErrorMessage(null);
         const [articlesData, categoriesData] = await Promise.all([
           fetchPublishedArticles({ limit: 3 }),
           fetchCategories()
         ]);
         setFeaturedArticles(articlesData.slice(0, 3));
         setCategories(categoriesData);
-      } catch (err) {
-        console.error('Error loading homepage data:', err);
+      } catch (err: any) {
+        console.error('Error loading homepage data from Supabase:', err);
+        setErrorMessage(err.message || 'Unable to connect to the database.');
       } finally {
         setLoading(false);
       }
@@ -140,7 +143,17 @@ export const HomePage: React.FC<HomePageProps> = ({ navigate }) => {
           </button>
         </div>
 
-        {loading ? (
+        {errorMessage ? (
+          <div className="paper-card p-8 text-center rounded-2xl border border-amber-200 bg-amber-50/60 max-w-2xl mx-auto space-y-3">
+            <div className="w-12 h-12 mx-auto rounded-full bg-amber-100 flex items-center justify-center text-amber-800">
+              <Feather className="w-5 h-5 text-amber-700" />
+            </div>
+            <h3 className="font-serif font-bold text-lg text-[#0D3B2E]">Database Connection Issue</h3>
+            <p className="font-sans text-xs text-[#4E5754] max-w-md mx-auto">
+              {errorMessage}
+            </p>
+          </div>
+        ) : loading ? (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
             {[1, 2, 3].map((n) => (
               <div key={n} className="paper-card rounded-2xl p-6 animate-pulse space-y-4">

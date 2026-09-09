@@ -143,6 +143,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
   const [confirmPassword, setConfirmPassword] = useState('');
   const [settingsNotice, setSettingsNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Initial Data Load & Realtime Sync
   useEffect(() => {
@@ -159,6 +160,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
 
   async function loadAllData() {
     try {
+      setLoadError(null);
       const [statsData, articlesData, categoriesData, messagesData] = await Promise.all([
         fetchAdminStats(),
         fetchAdminArticles(),
@@ -173,8 +175,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
       if (categoriesData.length > 0 && !editCategory) {
         setEditCategory(categoriesData[0].name);
       }
-    } catch (err) {
-      console.error('Failed to load admin data:', err);
+    } catch (err: any) {
+      console.error('Failed to load admin data from Supabase:', err);
+      setLoadError(err.message || 'Unable to connect to Supabase database.');
     }
   }
 
@@ -441,7 +444,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
       } : prev);
 
       // Persist to Supabase and database
-      const saved = await toggleMessageRead(msg.id, newStatus, msg);
+      const saved = await toggleMessageRead(msg.id, newStatus);
       setMessages(prev => prev.map(m => m.id === msg.id ? saved : m));
       if (selectedMessage?.id === msg.id && (!newStatus || messageFilter !== 'inbox')) {
         setSelectedMessage(saved);
@@ -646,6 +649,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
       {/* Main Admin Content Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8">
         
+        {loadError && (
+          <div className="mb-6 p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
+              <p className="text-xs sm:text-sm font-medium">
+                <strong>Database Error:</strong> {loadError}
+              </p>
+            </div>
+            <button
+              onClick={() => loadAllData()}
+              className="text-xs px-3 py-1 rounded-lg bg-amber-200/80 hover:bg-amber-300 font-semibold transition-colors"
+            >
+              Retry Connection
+            </button>
+          </div>
+        )}
+
         {/* ======================================================== */}
         {/* TAB 1: OVERVIEW */}
         {/* ======================================================== */}
