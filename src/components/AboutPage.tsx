@@ -1,6 +1,7 @@
 import React from 'react';
 import { ViewRoute } from '../types';
 import { EMIOLUWA_ABOUT_IMAGE, EMIOLUWA_LOGO_IMAGE } from '../lib/assets';
+import { useAuthorProfile } from '../lib/api';
 import { 
   Feather, 
   BookOpen, 
@@ -19,6 +20,7 @@ interface AboutPageProps {
 }
 
 export const AboutPage: React.FC<AboutPageProps> = ({ navigate }) => {
+  const author = useAuthorProfile();
   const topics = [
     { title: 'Student Life', desc: 'Deadlines, hostel conversations, exams, holidays, and campus growing pains.' },
     { title: 'Personal Growth', desc: 'Lessons on patience, discipline, resilience, and unhurried progress.' },
@@ -40,11 +42,11 @@ export const AboutPage: React.FC<AboutPageProps> = ({ navigate }) => {
           </div>
 
           <h1 className="font-serif text-4xl sm:text-5xl md:text-6xl font-bold text-[#0D3B2E] tracking-tight">
-            About Emioluwa
+            About {author.name}
           </h1>
 
           <p className="font-serif italic text-xl text-[#786D5F]">
-            A young writer crafting words that connect and stories that stay.
+            {author.bio}
           </p>
         </div>
 
@@ -57,13 +59,13 @@ export const AboutPage: React.FC<AboutPageProps> = ({ navigate }) => {
               <div className="relative rounded-2xl overflow-hidden shadow-md border-2 border-[#EFE8DA] bg-[#EFE8DA]">
                 <img
                   src={EMIOLUWA_ABOUT_IMAGE}
-                  alt="Emioluwa writing portrait"
+                  alt={`${author.name} writing portrait`}
                   referrerPolicy="no-referrer"
                   className="w-full h-88 sm:h-[420px] object-cover object-top"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-[#0D3B2E]/70 via-transparent to-transparent" />
                 <div className="absolute bottom-4 left-4 right-4 text-[#FAF7F2]">
-                  <p className="font-serif font-bold text-lg">Emioluwa</p>
+                  <p className="font-serif font-bold text-lg">{author.name}</p>
                   <p className="text-xs text-[#E4CA7E]">Writer, Essayist & Student • Nigeria</p>
                 </div>
               </div>
@@ -87,12 +89,12 @@ export const AboutPage: React.FC<AboutPageProps> = ({ navigate }) => {
               <div className="mt-4 p-3 rounded-xl bg-[#FAF7F2] border border-[#E8DEC8] flex items-center gap-3">
                 <img
                   src={EMIOLUWA_LOGO_IMAGE}
-                  alt="Emioluwa Writes Official Logo"
+                  alt={`${author.name} Writes Official Logo`}
                   referrerPolicy="no-referrer"
                   className="w-12 h-12 rounded-lg object-contain bg-white border border-[#E0D5C1] p-1 shadow-xs"
                 />
                 <div>
-                  <span className="text-xs font-serif font-bold text-[#0D3B2E] block">Emioluwa Writes</span>
+                  <span className="text-xs font-serif font-bold text-[#0D3B2E] block">{author.name} Writes</span>
                   <span className="text-[10px] text-[#786D5F] block">Official Author Space</span>
                 </div>
               </div>
@@ -101,11 +103,11 @@ export const AboutPage: React.FC<AboutPageProps> = ({ navigate }) => {
             {/* Long-form Content */}
             <div className="w-full md:w-7/12 space-y-6 text-[#242927] font-serif text-lg leading-relaxed">
               <p className="dropcap">
-                I'm Emioluwa, a young writer who believes that words can do more than communicate. They can make people pause, think, feel, learn and sometimes see life differently.
+                I'm {author.name}, a young writer who believes that words can do more than communicate. They can make people pause, think, feel, learn and sometimes see life differently.
               </p>
 
               <p>
-                <strong>Emioluwa Writes</strong> is my personal space on the internet — a place for articles, reflections, ideas, stories and the small lessons I pick up from everyday life.
+                <strong>{author.name} Writes</strong> is my personal space on the internet — a place for articles, reflections, ideas, stories and the small lessons I pick up from everyday life.
               </p>
 
               <p>

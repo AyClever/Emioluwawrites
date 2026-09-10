@@ -1,6 +1,7 @@
 import React from 'react';
 import { ViewRoute } from '../types';
 import { EMIOLUWA_LOGO_IMAGE } from '../lib/assets';
+import { useAuthorProfile } from '../lib/api';
 import { Feather, Heart, Mail, Phone, ArrowUpRight, Lock } from 'lucide-react';
 
 interface FooterProps {
@@ -8,6 +9,7 @@ interface FooterProps {
 }
 
 export const Footer: React.FC<FooterProps> = ({ navigate }) => {
+  const author = useAuthorProfile();
   return (
     <footer id="main-footer" className="bg-[#0D3B2E] text-[#FAF7F2] pt-16 pb-12 mt-20 border-t border-[#135241]">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -39,7 +41,7 @@ export const Footer: React.FC<FooterProps> = ({ navigate }) => {
             </p>
             
             <p className="text-sm text-[#FAF7F2]/80 leading-relaxed max-w-md font-sans">
-              The online writing space and personal brand of Emioluwa, a young Nigerian writer capturing student life, quiet growth, and reflections from the everyday page.
+              The online writing space and personal brand of {author.name}, a young Nigerian writer capturing student life, quiet growth, and reflections from the everyday page.
             </p>
 
             <div className="pt-2 flex items-center gap-4 text-xs text-[#E4CA7E]/90">
@@ -97,11 +99,11 @@ export const Footer: React.FC<FooterProps> = ({ navigate }) => {
             </h4>
             <div className="space-y-2.5 text-sm">
               <a 
-                href="mailto:emioluwawrites@gmail.com" 
+                href={`mailto:${author.email}`} 
                 className="flex items-center gap-2 text-[#FAF7F2]/85 hover:text-[#E4CA7E] transition-colors group"
               >
                 <Mail className="w-4 h-4 text-[#E4CA7E]" />
-                <span className="truncate">emioluwawrites@gmail.com</span>
+                <span className="truncate">{author.email}</span>
                 <ArrowUpRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
               </a>
 

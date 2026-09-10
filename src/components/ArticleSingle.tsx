@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Article, ViewRoute } from '../types';
-import { fetchArticleBySlug, subscribeToArticlesChange } from '../lib/api';
+import { fetchArticleBySlug, subscribeToArticlesChange, useAuthorProfile } from '../lib/api';
 import { EMIOLUWA_ABOUT_IMAGE } from '../lib/assets';
 import { 
   Clock, 
@@ -25,6 +25,7 @@ interface ArticleSingleProps {
 }
 
 export const ArticleSingle: React.FC<ArticleSingleProps> = ({ slug, navigate }) => {
+  const author = useAuthorProfile();
   const [article, setArticle] = useState<Article | null>(null);
   const [relatedArticles, setRelatedArticles] = useState<Article[]>([]);
   const [loading, setLoading] = useState(true);
@@ -292,7 +293,7 @@ export const ArticleSingle: React.FC<ArticleSingleProps> = ({ slug, navigate }) 
         {/* Metadata Bar */}
         <div className="flex flex-wrap items-center justify-center gap-4 sm:gap-6 text-xs text-[#786D5F] font-sans pt-4 border-t border-[#E8DEC8]">
           <div className="flex items-center gap-1.5">
-            <span className="font-medium text-[#0D3B2E]">By Emioluwa</span>
+            <span className="font-medium text-[#0D3B2E]">By {author.name}</span>
           </div>
           <span>•</span>
           <div className="flex items-center gap-1.5">
@@ -376,24 +377,24 @@ export const ArticleSingle: React.FC<ArticleSingleProps> = ({ slug, navigate }) 
           <div className="w-20 h-20 rounded-2xl overflow-hidden flex-shrink-0 border border-[#E8DEC8]">
             <img
               src={EMIOLUWA_ABOUT_IMAGE}
-              alt="Emioluwa"
+              alt={author.name}
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover object-top"
             />
           </div>
           <div className="space-y-3 text-center sm:text-left">
             <div>
-              <h3 className="font-serif text-xl font-bold text-[#0D3B2E]">Emioluwa</h3>
+              <h3 className="font-serif text-xl font-bold text-[#0D3B2E]">{author.name}</h3>
               <p className="font-sans text-xs text-[#C29B38] font-semibold tracking-wider uppercase">Author & Essayist</p>
             </div>
             <p className="font-sans text-sm text-[#4E5754] leading-relaxed">
-              A young Nigerian writer turning everyday student life, quiet doubts, and growing pains into essays and stories that connect.
+              {author.bio}
             </p>
             <button
               onClick={() => navigate({ type: 'contact' })}
               className="inline-flex items-center gap-1 text-xs font-bold text-[#0D3B2E] hover:underline"
             >
-              <span>Send Emioluwa a note</span>
+              <span>Send {author.name} a note</span>
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           </div>

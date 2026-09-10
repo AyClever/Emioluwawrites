@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import { Article, Category, Message, AdminUser, AdminStats } from '../types';
 import { supabase, isSupabaseConfigured } from './supabase';
 import mammoth from 'mammoth';
@@ -397,26 +398,73 @@ export async function submitSayHello(data: { name: string; email: string; messag
 // ==============================================================================
 // AUTHENTICATION & ADMIN PROFILE
 // ==============================================================================
+// AUTHENTICATION & ADMIN PROFILE
+// ==============================================================================
 
-/**
- * Resend confirmation email for author account via Supabase Auth
- */
-export async function resendConfirmationEmail(email: string): Promise<{ success: boolean; message: string }> {
-  assertSupabaseConfigured();
-  const cleanEmail = email.trim().toLowerCase();
-  const { error } = await supabase.auth.resend({
-    type: 'signup',
-    email: cleanEmail
-  });
+export const AUTHORIZED_ADMIN_EMAIL = 'emioluwawrites@gmail.com';
 
-  if (error) {
-    throw new Error(error.message || 'Failed to resend confirmation email.');
-  }
+// Author profile cache and reactive subscribers
+export interface AuthorProfile {
+  name: string;
+  bio: string;
+  email: string;
+  avatar_url?: string | null;
+}
 
-  return {
-    success: true,
-    message: `A confirmation email has been dispatched to ${cleanEmail}. Please check your inbox (and spam folder), or click "Confirm user" in your Supabase Dashboard under Authentication -> Users.`
+let cachedAuthorProfile: AuthorProfile = {
+  name: 'Emioluwa',
+  bio: 'Young Nigerian writer, essayist, and student crafting words that connect and stories that stay.',
+  email: 'emioluwawrites@gmail.com'
+};
+
+const authorProfileListeners = new Set<(profile: AuthorProfile) => void>();
+
+export function subscribeToAuthorProfile(listener: (profile: AuthorProfile) => void): () => void {
+  authorProfileListeners.add(listener);
+  listener(cachedAuthorProfile);
+  return () => {
+    authorProfileListeners.delete(listener);
   };
+}
+
+export async function fetchAuthorProfile(): Promise<AuthorProfile> {
+  if (!isSupabaseConfigured) return cachedAuthorProfile;
+
+  try {
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('name, bio, email, avatar_url')
+      .eq('role', 'admin')
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+
+    if (!error && profile) {
+      cachedAuthorProfile = {
+        name: profile.name || cachedAuthorProfile.name,
+        bio: profile.bio || cachedAuthorProfile.bio,
+        email: profile.email || cachedAuthorProfile.email,
+        avatar_url: profile.avatar_url
+      };
+      authorProfileListeners.forEach(cb => cb(cachedAuthorProfile));
+      return cachedAuthorProfile;
+    }
+  } catch (err) {
+    console.warn('Could not load author profile from Supabase:', err);
+  }
+  return cachedAuthorProfile;
+}
+
+export function useAuthorProfile(): AuthorProfile {
+  const [profile, setProfile] = useState<AuthorProfile>(cachedAuthorProfile);
+
+  useEffect(() => {
+    fetchAuthorProfile().then(setProfile);
+    const unsubscribe = subscribeToAuthorProfile(setProfile);
+    return unsubscribe;
+  }, []);
+
+  return profile;
 }
 
 /**
@@ -429,15 +477,26 @@ export async function loginAdmin(email: string, password: string): Promise<{ suc
   const cleanEmail = email.trim().toLowerCase();
   const cleanPass = password.trim();
 
-  // Strict check: Only authorized author emails allowed
-  const allowedEmails = [
-    'emioluwawrites@gmail.com',
-    'lifeofgod2912@gmail.com',
-    'fayoseayomipo18@gmail.com'
-  ];
+  // Strict check: Only authorized author account is permitted
+  // Verify against AUTHORIZED_ADMIN_EMAIL or active admin profile email in Supabase
+  let activeAdminEmail = AUTHORIZED_ADMIN_EMAIL;
+  try {
+    const { data: adminProfile } = await supabase
+      .from('profiles')
+      .select('email')
+      .eq('role', 'admin')
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (adminProfile?.email) {
+      activeAdminEmail = adminProfile.email.toLowerCase().trim();
+    }
+  } catch {
+    // Fall back to default
+  }
 
-  if (!allowedEmails.includes(cleanEmail)) {
-    throw new Error('Access denied. Readers do not have access to the Admin Portal. Please use the author email.');
+  if (cleanEmail !== AUTHORIZED_ADMIN_EMAIL && cleanEmail !== activeAdminEmail) {
+    throw new Error('Access denied. Only the authorized author account is permitted to access the Admin Dashboard.');
   }
 
   // Official Supabase Auth (Mandatory for real RLS policies & persistence)
@@ -448,18 +507,23 @@ export async function loginAdmin(email: string, password: string): Promise<{ suc
 
   if (authError) {
     if (authError.code === 'email_not_confirmed' || authError.message?.toLowerCase().includes('email not confirmed')) {
-      throw new Error(
-        `Email confirmation required: Your Supabase user account (${cleanEmail}) has not been confirmed yet. Please verify your email via the confirmation link sent to your inbox, or click "Confirm user" in the Supabase Dashboard under Authentication -> Users.`
-      );
+      throw new Error('Access denied: Account email is not confirmed in Supabase.');
     }
     if (authError.code === 'invalid_credentials' || authError.message?.toLowerCase().includes('invalid login credentials')) {
-      throw new Error('Invalid email or password. Please verify your credentials.');
+      throw new Error('Invalid email or password.');
     }
     throw new Error(authError.message || 'Supabase authentication failed.');
   }
 
   if (!authData?.session || !authData.user) {
     throw new Error('Supabase authentication failed: No active session was returned by Supabase.');
+  }
+
+  // Unconfirmed users cannot access the dashboard
+  const user = authData.user;
+  if (!user.email_confirmed_at && !user.confirmed_at) {
+    await supabase.auth.signOut();
+    throw new Error('Access denied: Account email is not confirmed in Supabase.');
   }
 
   const token = authData.session.access_token;
@@ -488,6 +552,14 @@ export async function loginAdmin(email: string, password: string): Promise<{ suc
     console.warn('Could not load profile from Supabase:', err);
   }
 
+  // Sync cache
+  cachedAuthorProfile = {
+    name: adminUser.name,
+    bio: adminUser.bio,
+    email: adminUser.email
+  };
+  authorProfileListeners.forEach(cb => cb(cachedAuthorProfile));
+
   return { success: true, token, admin: adminUser };
 }
 
@@ -505,28 +577,57 @@ export async function fetchAdminMe(): Promise<AdminUser> {
   }
 
   const user = authData.user;
-  let adminUser: AdminUser = {
-    id: user.id,
-    email: user.email || '',
-    name: 'Emioluwa',
-    bio: 'Young Nigerian writer, essayist, and student crafting words that connect and stories that stay.'
-  };
+  const userEmail = (user.email || '').toLowerCase().trim();
 
+  // Load profile from Supabase profiles table
+  let profile: any = null;
   try {
-    const { data: profile } = await supabase
+    const { data: profData } = await supabase
       .from('profiles')
       .select('*')
       .eq('id', user.id)
       .maybeSingle();
-
-    if (profile) {
-      adminUser.name = profile.name || adminUser.name;
-      adminUser.bio = profile.bio || adminUser.bio;
-      adminUser.email = profile.email || adminUser.email;
-    }
+    profile = profData;
   } catch (err) {
-    console.warn('Could not load profile from Supabase:', err);
+    console.warn('Could not load profile in fetchAdminMe:', err);
   }
+
+  const profileEmail = (profile?.email || '').toLowerCase().trim();
+  const isAuthorized = (
+    userEmail === AUTHORIZED_ADMIN_EMAIL ||
+    profileEmail === userEmail ||
+    profile?.role === 'admin'
+  );
+
+  // Strict check: Only the single authorized admin account is permitted
+  if (!isAuthorized) {
+    await supabase.auth.signOut();
+    removeAdminToken();
+    throw new Error('Access denied. Unauthorized account.');
+  }
+
+  // Strict check: Unconfirmed users cannot access the dashboard
+  if (!user.email_confirmed_at && !user.confirmed_at) {
+    await supabase.auth.signOut();
+    removeAdminToken();
+    throw new Error('Access denied: Account email is not confirmed.');
+  }
+
+  const adminUser: AdminUser = {
+    id: user.id,
+    email: profile?.email || user.email || AUTHORIZED_ADMIN_EMAIL,
+    name: profile?.name || 'Emioluwa',
+    bio: profile?.bio || 'Young Nigerian writer, essayist, and student crafting words that connect and stories that stay.'
+  };
+
+  // Sync cache
+  cachedAuthorProfile = {
+    name: adminUser.name,
+    bio: adminUser.bio,
+    email: adminUser.email,
+    avatar_url: profile?.avatar_url
+  };
+  authorProfileListeners.forEach(cb => cb(cachedAuthorProfile));
 
   return adminUser;
 }
@@ -546,45 +647,169 @@ export async function logoutAdmin(): Promise<void> {
   }
 }
 
+export interface UpdateAdminProfileInput {
+  name?: string;
+  bio?: string;
+  email?: string;
+  currentPassword?: string;
+  newPassword?: string;
+  confirmPassword?: string;
+}
+
 /**
- * Update Admin Profile & Credentials in Supabase
+ * Update Admin Profile & Credentials directly in Supabase
  */
-export async function updateAdminProfile(data: { name?: string; bio?: string; email?: string; currentPassword?: string; newPassword?: string }): Promise<{ success: boolean; admin: AdminUser; message: string }> {
+export async function updateAdminProfile(data: UpdateAdminProfileInput): Promise<{
+  success: boolean;
+  admin: AdminUser;
+  message: string;
+}> {
+  assertSupabaseConfigured();
+
+  // 1. Get currently authenticated Supabase admin user
   const { data: authData, error: authError } = await supabase.auth.getUser();
-  if (authError || !authData.user) {
-    throw new Error('Unauthorized');
+  if (authError || !authData?.user) {
+    throw new Error('Not authenticated. Please log in to update your profile.');
   }
 
-  const userId = authData.user.id;
-  const updates: Record<string, any> = {};
-  if (data.name) updates.name = data.name.trim();
-  if (data.bio) updates.bio = data.bio.trim();
-  if (data.email) updates.email = data.email.trim().toLowerCase();
+  const user = authData.user;
+  const currentEmail = user.email || '';
+  const userId = user.id;
 
-  if (Object.keys(updates).length > 0) {
-    const { error: profileError } = await supabase
-      .from('profiles')
-      .update(updates)
-      .eq('id', userId);
-
-    if (profileError) {
-      throw new Error(profileError.message || 'Failed to update profile');
+  // 2. Change Password Flow (if any password field is populated)
+  const hasPasswordAttempt = Boolean(data.currentPassword || data.newPassword || data.confirmPassword);
+  if (hasPasswordAttempt) {
+    if (!data.currentPassword) {
+      throw new Error('Please enter your current password to verify your identity before changing your password.');
     }
-  }
+    if (!data.newPassword) {
+      throw new Error('Please enter your new password.');
+    }
+    if (!data.confirmPassword) {
+      throw new Error('Please confirm your new password.');
+    }
+    if (data.newPassword !== data.confirmPassword) {
+      throw new Error('New password and confirmation password do not match.');
+    }
+    if (data.newPassword.length < 6) {
+      throw new Error('New password must be at least 6 characters long.');
+    }
 
-  // Update password if provided
-  if (data.newPassword) {
+    // Verify current password with Supabase Authentication securely
+    const { error: verifyErr } = await supabase.auth.signInWithPassword({
+      email: currentEmail,
+      password: data.currentPassword
+    });
+
+    if (verifyErr) {
+      throw new Error('Current password is incorrect. Verification failed.');
+    }
+
+    // Update password securely through Supabase Authentication
     const { error: passError } = await supabase.auth.updateUser({
       password: data.newPassword
     });
 
     if (passError) {
-      throw new Error(passError.message || 'Failed to update password');
+      throw new Error(passError.message || 'Failed to update password in Supabase.');
     }
   }
 
-  const admin = await fetchAdminMe();
-  return { success: true, admin, message: 'Author profile updated successfully.' };
+  // 3. Admin Email Update
+  let emailNotice: string | null = null;
+  let targetEmail = currentEmail;
+
+  if (data.email) {
+    const cleanEmail = data.email.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      throw new Error('Please enter a valid email address.');
+    }
+
+    if (cleanEmail !== currentEmail.toLowerCase()) {
+      // Update the authenticated Supabase user's email securely
+      const { data: emailRes, error: emailErr } = await supabase.auth.updateUser({
+        email: cleanEmail
+      });
+
+      if (emailErr) {
+        throw new Error(emailErr.message || 'Failed to update email in Supabase Authentication.');
+      }
+
+      targetEmail = cleanEmail;
+      if (emailRes?.user && (emailRes.user as any).new_email) {
+        emailNotice = 'A confirmation email was sent to your new address to complete the email change.';
+      }
+    }
+  }
+
+  // 4. Update Profile in Supabase `profiles` table
+  const profileUpdates: Record<string, any> = {
+    updated_at: new Date().toISOString()
+  };
+  if (data.name !== undefined) profileUpdates.name = data.name.trim();
+  if (data.bio !== undefined) profileUpdates.bio = data.bio.trim();
+  if (targetEmail) profileUpdates.email = targetEmail;
+
+  // Check if profile exists in public.profiles
+  const { data: existingProfile } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (existingProfile) {
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .update(profileUpdates)
+      .eq('id', userId);
+
+    if (profileError) {
+      throw new Error(profileError.message || 'Failed to update profile in Supabase database.');
+    }
+  } else {
+    const { error: insertError } = await supabase
+      .from('profiles')
+      .insert([{
+        id: userId,
+        role: 'admin',
+        ...profileUpdates
+      }]);
+
+    if (insertError) {
+      throw new Error(insertError.message || 'Failed to create profile in Supabase database.');
+    }
+  }
+
+  // Update cached profile and notify all subscriber components
+  cachedAuthorProfile = {
+    ...cachedAuthorProfile,
+    name: data.name !== undefined ? data.name.trim() : cachedAuthorProfile.name,
+    bio: data.bio !== undefined ? data.bio.trim() : cachedAuthorProfile.bio,
+    email: targetEmail || cachedAuthorProfile.email
+  };
+  authorProfileListeners.forEach(cb => cb(cachedAuthorProfile));
+
+  // Broadcast change event
+  broadcastArticlesChanged('profile:updated');
+
+  // Fetch freshly updated admin object directly from Supabase
+  const updatedAdmin = await fetchAdminMe();
+
+  let message = 'Profile settings updated successfully in Supabase!';
+  if (hasPasswordAttempt && emailNotice) {
+    message = `Password changed successfully! ${emailNotice}`;
+  } else if (hasPasswordAttempt) {
+    message = 'Password changed and profile settings updated successfully!';
+  } else if (emailNotice) {
+    message = `Profile settings saved! ${emailNotice}`;
+  }
+
+  return {
+    success: true,
+    admin: updatedAdmin,
+    message
+  };
 }
 
 // ==============================================================================

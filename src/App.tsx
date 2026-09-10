@@ -148,7 +148,7 @@ export default function App() {
 
       case 'admin_login':
         if (adminUser) {
-          return <AdminDashboard admin={adminUser} navigate={navigate} onLogout={handleLogout} />;
+          return <AdminDashboard admin={adminUser} navigate={navigate} onLogout={handleLogout} onUpdateAdmin={setAdminUser} />;
         }
         return <AdminLogin navigate={navigate} onLoginSuccess={handleLoginSuccess} />;
 
@@ -157,7 +157,7 @@ export default function App() {
           return <AdminLogin navigate={navigate} onLoginSuccess={handleLoginSuccess} />;
         }
         if (adminUser) {
-          return <AdminDashboard admin={adminUser} navigate={navigate} onLogout={handleLogout} />;
+          return <AdminDashboard admin={adminUser} navigate={navigate} onLogout={handleLogout} onUpdateAdmin={setAdminUser} />;
         }
         return (
           <div className="min-h-[60vh] flex items-center justify-center">

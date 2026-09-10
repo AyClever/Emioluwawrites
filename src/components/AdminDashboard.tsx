@@ -62,6 +62,7 @@ interface AdminDashboardProps {
   admin: AdminUser;
   navigate: (route: ViewRoute) => void;
   onLogout: () => void;
+  onUpdateAdmin?: (admin: AdminUser) => void;
 }
 
 const PRESET_IMAGES = [
@@ -73,7 +74,7 @@ const PRESET_IMAGES = [
   { label: 'Warm Sunlight', url: 'https://images.unsplash.com/photo-1519682337058-a94d519337bc?q=80&w=1200&auto=format&fit=crop' }
 ];
 
-export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate, onLogout }) => {
+export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate, onLogout, onUpdateAdmin }) => {
   const [activeTab, setActiveTab] = useState<'overview' | 'articles' | 'editor' | 'categories' | 'messages' | 'settings'>('overview');
 
   // Stats
@@ -144,6 +145,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
   const [settingsNotice, setSettingsNotice] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [savingSettings, setSavingSettings] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  // Keep settings fields in sync when admin prop updates from Supabase
+  useEffect(() => {
+    setProfileName(admin.name);
+    setProfileBio(admin.bio);
+    setProfileEmail(admin.email);
+  }, [admin.name, admin.bio, admin.email]);
 
   // Initial Data Load & Realtime Sync
   useEffect(() => {
@@ -485,30 +493,61 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
     }
   };
 
-  // Settings Handler
+  // Settings Handler - Direct persistence to Supabase
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (newPassword && newPassword !== confirmPassword) {
-      setSettingsNotice({ type: 'error', text: 'New passwords do not match' });
-      return;
+    setSettingsNotice(null);
+
+    // Password validation if change password is being attempted
+    const isChangingPassword = Boolean(currentPassword || newPassword || confirmPassword);
+    if (isChangingPassword) {
+      if (!currentPassword) {
+        setSettingsNotice({ type: 'error', text: 'Please enter your current password to verify your identity.' });
+        return;
+      }
+      if (!newPassword) {
+        setSettingsNotice({ type: 'error', text: 'Please enter your new password.' });
+        return;
+      }
+      if (newPassword.length < 6) {
+        setSettingsNotice({ type: 'error', text: 'New password must be at least 6 characters long.' });
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        setSettingsNotice({ type: 'error', text: 'New passwords do not match.' });
+        return;
+      }
     }
 
     try {
       setSavingSettings(true);
-      setSettingsNotice(null);
-      await updateAdminProfile({
+      const res = await updateAdminProfile({
         name: profileName,
         bio: profileBio,
         email: profileEmail,
         currentPassword: currentPassword || undefined,
-        newPassword: newPassword || undefined
+        newPassword: newPassword || undefined,
+        confirmPassword: confirmPassword || undefined
       });
+
+      // Clear password fields on success
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-      setSettingsNotice({ type: 'success', text: 'Admin profile updated successfully!' });
+
+      // Keep inputs and app state synced with updated record
+      setProfileName(res.admin.name);
+      setProfileBio(res.admin.bio);
+      setProfileEmail(res.admin.email);
+
+      if (onUpdateAdmin) {
+        onUpdateAdmin(res.admin);
+      }
+
+      setSettingsNotice({ type: 'success', text: res.message || 'Profile settings updated successfully in Supabase!' });
     } catch (err: any) {
-      setSettingsNotice({ type: 'error', text: err.message || 'Failed to update profile' });
+      console.error('Failed to update settings in Supabase:', err);
+      setSettingsNotice({ type: 'error', text: err.message || 'Failed to update profile settings.' });
     } finally {
       setSavingSettings(false);
     }
@@ -1854,7 +1893,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
                   </div>
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="font-serif font-bold text-sm text-[#0D3B2E]">Emioluwa</span>
+                      <span className="font-serif font-bold text-sm text-[#0D3B2E]">{profileName || admin.name}</span>
                       <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#0D3B2E] text-[#E4CA7E] font-semibold">Active Author</span>
                     </div>
                     <p className="text-xs text-[#57615D] mt-0.5">About picture & official branding logo active across all reader views.</p>

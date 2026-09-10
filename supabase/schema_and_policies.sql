@@ -14,15 +14,11 @@
 -- 3. Enables the website_views table for unique visitor tracking.
 -- ==============================================================================
 
--- Step 1: Ensure Email Confirmation for Author Accounts in auth.users
+-- Step 1: Ensure Email Confirmation for the Author Account in auth.users
 UPDATE auth.users
 SET email_confirmed_at = COALESCE(email_confirmed_at, now()),
     confirmed_at = COALESCE(confirmed_at, now())
-WHERE email IN (
-  'emioluwawrites@gmail.com',
-  'lifeofgod2912@gmail.com',
-  'fayoseayomipo18@gmail.com'
-);
+WHERE email = 'emioluwawrites@gmail.com';
 
 -- Step 2: Ensure Profiles Table Exists and Links to auth.users with 'admin' Role
 CREATE TABLE IF NOT EXISTS public.profiles (
@@ -36,15 +32,11 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Upsert admin profiles for author accounts
+-- Upsert admin profile for the single author account
 INSERT INTO public.profiles (id, email, name, role)
 SELECT id, email, 'Emioluwa', 'admin'
 FROM auth.users
-WHERE email IN (
-  'emioluwawrites@gmail.com',
-  'lifeofgod2912@gmail.com',
-  'fayoseayomipo18@gmail.com'
-)
+WHERE email = 'emioluwawrites@gmail.com'
 ON CONFLICT (id) DO UPDATE
 SET role = 'admin',
     email = EXCLUDED.email;

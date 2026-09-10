@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Article, Category, ViewRoute } from '../types';
-import { fetchPublishedArticles, fetchCategories, subscribeToArticlesChange } from '../lib/api';
+import { fetchPublishedArticles, fetchCategories, subscribeToArticlesChange, useAuthorProfile } from '../lib/api';
 import { EMIOLUWA_ABOUT_IMAGE, EMIOLUWA_LOGO_IMAGE } from '../lib/assets';
 import { 
   ArrowRight, 
@@ -31,6 +31,7 @@ const CATEGORY_ICONS: Record<string, React.ReactNode> = {
 };
 
 export const HomePage: React.FC<HomePageProps> = ({ navigate }) => {
+  const author = useAuthorProfile();
   const [featuredArticles, setFeaturedArticles] = useState<Article[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
@@ -83,12 +84,12 @@ export const HomePage: React.FC<HomePageProps> = ({ navigate }) => {
           {/* Subtle brand badge */}
           <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#EFE8DA] border border-[#E0D5C1] text-xs font-semibold tracking-wider text-[#0D3B2E] uppercase mb-8 shadow-xs">
             <Feather className="w-3.5 h-3.5 text-[#C29B38]" />
-            <span>The Online Writing Space of Emioluwa</span>
+            <span>The Online Writing Space of {author.name}</span>
           </div>
 
           {/* Main Hero Typography */}
           <h1 className="font-serif text-4xl sm:text-6xl md:text-7xl font-bold tracking-tight text-[#0D3B2E] uppercase mb-6 leading-[1.08]">
-            EMIOLUWA WRITES
+            {author.name.toUpperCase()} WRITES
           </h1>
 
           <p className="font-serif italic text-2xl sm:text-3xl md:text-4xl text-[#0D3B2E]/90 font-medium mb-8 max-w-2xl mx-auto leading-tight">
@@ -96,7 +97,7 @@ export const HomePage: React.FC<HomePageProps> = ({ navigate }) => {
           </p>
 
           <p className="font-sans text-base sm:text-lg md:text-xl text-[#3A423F] max-w-2xl mx-auto leading-relaxed mb-10 font-normal">
-            "I'm Emioluwa, a young writer passionate about turning thoughts, experiences and ideas into words people can connect with."
+            "{author.bio}"
           </p>
 
           {/* Action Buttons */}
@@ -316,7 +317,7 @@ export const HomePage: React.FC<HomePageProps> = ({ navigate }) => {
                   onClick={() => navigate({ type: 'about' })}
                   className="inline-flex items-center gap-2 px-7 py-3.5 rounded-full bg-[#0D3B2E] text-[#FAF7F2] text-sm font-semibold hover:bg-[#135241] transition-all shadow-md group"
                 >
-                  <span>Meet Emioluwa</span>
+                  <span>Meet {author.name}</span>
                   <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                 </button>
               </div>
@@ -327,13 +328,13 @@ export const HomePage: React.FC<HomePageProps> = ({ navigate }) => {
               <div className="relative rounded-2xl overflow-hidden shadow-lg border-2 border-[#E0D5C1] bg-[#EFE8DA] max-w-xs w-full group">
                 <img
                   src={EMIOLUWA_ABOUT_IMAGE}
-                  alt="Emioluwa"
+                  alt={author.name}
                   referrerPolicy="no-referrer"
                   className="w-full h-80 object-cover object-top group-hover:scale-105 transition-transform duration-500"
                 />
                 <div className="absolute inset-0 bg-gradient-to-t from-[#0D3B2E]/80 via-transparent to-transparent" />
                 <div className="absolute bottom-4 left-4 right-4 text-[#FAF7F2]">
-                  <p className="font-serif font-bold text-base">Emioluwa</p>
+                  <p className="font-serif font-bold text-base">{author.name}</p>
                   <p className="text-[11px] text-[#E4CA7E]">Author & Creator • Nigeria</p>
                 </div>
               </div>
@@ -356,7 +357,7 @@ export const HomePage: React.FC<HomePageProps> = ({ navigate }) => {
               onClick={() => navigate({ type: 'contact' })}
               className="px-6 py-3 rounded-full bg-[#E4CA7E] text-[#0D3B2E] font-semibold text-sm hover:bg-[#F3DE9E] transition-all"
             >
-              Say Hello to Emioluwa
+              Say Hello to {author.name}
             </button>
           </div>
         </div>

@@ -137,9 +137,10 @@ export function initDatabase(): DatabaseSchema {
   ensureDataDirectory();
   
   if (!fs.existsSync(DB_FILE)) {
-    // Generate default admin password hash
-    const salt = bcrypt.genSaltSync(10);
-    const passwordHash = bcrypt.hashSync('Emioluwa2912', salt);
+    // Default admin password hash
+    const passwordHash = process.env.ADMIN_INITIAL_PASSWORD 
+      ? bcrypt.hashSync(process.env.ADMIN_INITIAL_PASSWORD, bcrypt.genSaltSync(10))
+      : '$2b$10$vF4W8OgHc77AmocyEPcNwuo3XlnHUmurNjxpdmGqHVSCyz0TutyJi';
 
     const initialDb: DatabaseSchema = {
       admin: {

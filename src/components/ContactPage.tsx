@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ViewRoute } from '../types';
-import { submitContactForm, submitSayHello } from '../lib/api';
+import { submitContactForm, submitSayHello, useAuthorProfile } from '../lib/api';
 import { 
   Phone, 
   Mail, 
@@ -22,6 +22,7 @@ interface ContactPageProps {
 }
 
 export const ContactPage: React.FC<ContactPageProps> = () => {
+  const author = useAuthorProfile();
   const [activeTab, setActiveTab] = useState<'contact' | 'say_hello'>('contact');
 
   // Contact Form State
@@ -46,7 +47,7 @@ export const ContactPage: React.FC<ContactPageProps> = () => {
   const [copiedPhone, setCopiedPhone] = useState(false);
 
   const handleCopyEmail = () => {
-    navigator.clipboard.writeText('emioluwawrites@gmail.com');
+    navigator.clipboard.writeText(author.email);
     setCopiedEmail(true);
     setTimeout(() => setCopiedEmail(false), 2000);
   };
@@ -179,16 +180,16 @@ export const ContactPage: React.FC<ContactPageProps> = () => {
                 Official Writing Inbox
               </span>
               <h3 className="font-serif text-2xl font-bold text-[#0D3B2E] truncate">
-                emioluwawrites@gmail.com
+                {author.email}
               </h3>
               <p className="font-sans text-xs text-[#57615D]">
-                The quickest way to reach Emioluwa for essay feedback, guest columns, or thoughtful correspondence.
+                The quickest way to reach {author.name} for essay feedback, guest columns, or thoughtful correspondence.
               </p>
             </div>
 
             <div className="flex items-center gap-3 pt-4 border-t border-[#EFE8DA]">
               <a
-                href="mailto:emioluwawrites@gmail.com"
+                href={`mailto:${author.email}`}
                 id="email-mailto-link"
                 className="px-4 py-2 rounded-xl bg-[#0D3B2E] text-[#FAF7F2] text-xs font-semibold hover:bg-[#135241] transition-colors"
               >
@@ -256,7 +257,7 @@ export const ContactPage: React.FC<ContactPageProps> = () => {
                     </div>
                     <h3 className="font-serif text-2xl font-bold text-[#0D3B2E]">Message Received</h3>
                     <p className="font-sans text-sm text-[#57615D] max-w-md mx-auto">
-                      Thank you for reaching out! Your message has been safely delivered to Emioluwa's desk. She will get back to you soon.
+                      Thank you for reaching out! Your message has been safely delivered to {author.name}'s desk. She will get back to you soon.
                     </p>
                     <button
                       onClick={() => setContactSuccess(false)}
@@ -380,10 +381,10 @@ export const ContactPage: React.FC<ContactPageProps> = () => {
                     {/* Chat Bubble Aesthetics */}
                     <div className="bg-[#FAF7F2] p-5 rounded-2xl border border-[#E8DEC8] flex items-start gap-4">
                       <div className="w-10 h-10 rounded-full bg-[#0D3B2E] text-[#FAF7F2] flex items-center justify-center flex-shrink-0 font-serif font-bold text-sm">
-                        E
+                        {author.name.charAt(0) || 'E'}
                       </div>
                       <div className="space-y-1 text-xs sm:text-sm text-[#3A423F]">
-                        <p className="font-serif font-bold text-[#0D3B2E]">Emioluwa says:</p>
+                        <p className="font-serif font-bold text-[#0D3B2E]">{author.name} says:</p>
                         <p className="font-serif italic text-[#57615D]">
                           "Hi there! Whether you loved a sentence, felt understood by an essay, or just want to introduce yourself from wherever you are reading, drop your note below. I read every single one."
                         </p>
@@ -431,7 +432,7 @@ export const ContactPage: React.FC<ContactPageProps> = () => {
 
                       <div>
                         <label className="block text-xs font-semibold text-[#0D3B2E] mb-1.5">
-                          Your note for Emioluwa *
+                          Your note for {author.name} *
                         </label>
                         <textarea
                           id="hello-message-input"
