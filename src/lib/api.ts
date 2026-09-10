@@ -399,9 +399,33 @@ export async function submitSayHello(data: { name: string; email: string; messag
 // ==============================================================================
 
 /**
- * Log in admin using author credentials (Supabase Auth with fallback to server auth verify)
+ * Resend confirmation email for author account via Supabase Auth
+ */
+export async function resendConfirmationEmail(email: string): Promise<{ success: boolean; message: string }> {
+  assertSupabaseConfigured();
+  const cleanEmail = email.trim().toLowerCase();
+  const { error } = await supabase.auth.resend({
+    type: 'signup',
+    email: cleanEmail
+  });
+
+  if (error) {
+    throw new Error(error.message || 'Failed to resend confirmation email.');
+  }
+
+  return {
+    success: true,
+    message: `A confirmation email has been dispatched to ${cleanEmail}. Please check your inbox (and spam folder), or click "Confirm user" in your Supabase Dashboard under Authentication -> Users.`
+  };
+}
+
+/**
+ * Log in admin using author credentials via real Supabase Auth
+ * Strictly uses the real Supabase session for all downstream database operations (RLS).
  */
 export async function loginAdmin(email: string, password: string): Promise<{ success: boolean; token: string; admin: AdminUser }> {
+  assertSupabaseConfigured();
+
   const cleanEmail = email.trim().toLowerCase();
   const cleanPass = password.trim();
 
@@ -416,150 +440,110 @@ export async function loginAdmin(email: string, password: string): Promise<{ suc
     throw new Error('Access denied. Readers do not have access to the Admin Portal. Please use the author email.');
   }
 
-  // 1. Try Supabase auth first
-  if (isSupabaseConfigured) {
-    try {
-      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-        email: cleanEmail,
-        password: cleanPass
-      });
+  // Official Supabase Auth (Mandatory for real RLS policies & persistence)
+  const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+    email: cleanEmail,
+    password: cleanPass
+  });
 
-      if (!authError && authData.session) {
-        const token = authData.session.access_token;
-        setAdminToken(token);
-
-        let adminUser: AdminUser = {
-          id: authData.user.id,
-          email: authData.user.email || cleanEmail,
-          name: 'Emioluwa',
-          bio: 'Young Nigerian writer, essayist, and student crafting words that connect and stories that stay.'
-        };
-
-        try {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', authData.user.id)
-            .maybeSingle();
-
-          if (profile) {
-            adminUser.name = profile.name || adminUser.name;
-            adminUser.bio = profile.bio || adminUser.bio;
-          }
-        } catch {}
-
-        return { success: true, token, admin: adminUser };
-      }
-    } catch (sbErr) {
-      console.warn('Supabase signInWithPassword failed:', sbErr);
+  if (authError) {
+    if (authError.code === 'email_not_confirmed' || authError.message?.toLowerCase().includes('email not confirmed')) {
+      throw new Error(
+        `Email confirmation required: Your Supabase user account (${cleanEmail}) has not been confirmed yet. Please verify your email via the confirmation link sent to your inbox, or click "Confirm user" in the Supabase Dashboard under Authentication -> Users.`
+      );
     }
+    if (authError.code === 'invalid_credentials' || authError.message?.toLowerCase().includes('invalid login credentials')) {
+      throw new Error('Invalid email or password. Please verify your credentials.');
+    }
+    throw new Error(authError.message || 'Supabase authentication failed.');
   }
 
-  // 2. Author password verification
-  if (cleanPass === 'Emioluwa2912') {
-    const directToken = `admin-session-${Date.now()}`;
-    setAdminToken(directToken);
-    return {
-      success: true,
-      token: directToken,
-      admin: {
-        id: 'admin-1',
-        email: cleanEmail,
-        name: 'Emioluwa',
-        bio: 'Young Nigerian writer, essayist, and student crafting words that connect and stories that stay.'
-      }
-    };
+  if (!authData?.session || !authData.user) {
+    throw new Error('Supabase authentication failed: No active session was returned by Supabase.');
   }
 
-  // 3. Fallback to server auth check
+  const token = authData.session.access_token;
+  setAdminToken(token);
+
+  let adminUser: AdminUser = {
+    id: authData.user.id,
+    email: authData.user.email || cleanEmail,
+    name: 'Emioluwa',
+    bio: 'Young Nigerian writer, essayist, and student crafting words that connect and stories that stay.'
+  };
+
   try {
-    const res = await fetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: cleanEmail, password: cleanPass })
-    });
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', authData.user.id)
+      .maybeSingle();
 
-    if (res.ok) {
-      const data = await res.json();
-      if (data.token) {
-        setAdminToken(data.token);
-        return {
-          success: true,
-          token: data.token,
-          admin: data.admin || {
-            id: 'admin-1',
-            email: cleanEmail,
-            name: 'Emioluwa',
-            bio: 'Young Nigerian writer, essayist, and student crafting words that connect and stories that stay.'
-          }
-        };
-      }
-    } else {
-      const errData = await res.json().catch(() => ({}));
-      if (errData?.error) {
-        throw new Error(errData.error);
-      }
+    if (profile) {
+      adminUser.name = profile.name || adminUser.name;
+      adminUser.bio = profile.bio || adminUser.bio;
+      adminUser.email = profile.email || adminUser.email;
     }
-  } catch (fetchErr: any) {
-    if (fetchErr.message && !fetchErr.message.includes('fetch')) {
-      throw fetchErr;
-    }
+  } catch (err) {
+    console.warn('Could not load profile from Supabase:', err);
   }
 
-  throw new Error('Invalid email or password. Access restricted to the author.');
+  return { success: true, token, admin: adminUser };
 }
 
 /**
- * Fetch currently authenticated admin user
+ * Fetch currently authenticated admin user strictly from real Supabase session
  */
 export async function fetchAdminMe(): Promise<AdminUser> {
-  const localToken = getAdminToken();
+  assertSupabaseConfigured();
+
+  const { data: authData, error: authError } = await supabase.auth.getUser();
+
+  if (authError || !authData?.user) {
+    removeAdminToken();
+    throw new Error('Not authenticated with Supabase.');
+  }
+
+  const user = authData.user;
+  let adminUser: AdminUser = {
+    id: user.id,
+    email: user.email || '',
+    name: 'Emioluwa',
+    bio: 'Young Nigerian writer, essayist, and student crafting words that connect and stories that stay.'
+  };
 
   try {
-    const { data: authData, error: authError } = await supabase.auth.getUser();
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', user.id)
+      .maybeSingle();
 
-    if (!authError && authData.user) {
-      const user = authData.user;
-      let adminUser: AdminUser = {
-        id: user.id,
-        email: user.email || '',
-        name: 'Emioluwa',
-        bio: 'Young Nigerian writer, essayist, and student crafting words that connect and stories that stay.'
-      };
-
-      try {
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', user.id)
-          .maybeSingle();
-
-        if (profile) {
-          adminUser.name = profile.name || adminUser.name;
-          adminUser.bio = profile.bio || adminUser.bio;
-          adminUser.email = profile.email || adminUser.email;
-        }
-      } catch (err) {
-        console.warn('Could not load profile, using auth fallback', err);
-      }
-
-      return adminUser;
+    if (profile) {
+      adminUser.name = profile.name || adminUser.name;
+      adminUser.bio = profile.bio || adminUser.bio;
+      adminUser.email = profile.email || adminUser.email;
     }
   } catch (err) {
-    console.warn('Supabase auth get user error:', err);
+    console.warn('Could not load profile from Supabase:', err);
   }
 
-  if (localToken) {
-    return {
-      id: 'admin-1',
-      email: 'emioluwawrites@gmail.com',
-      name: 'Emioluwa',
-      bio: 'Young Nigerian writer, essayist, and student crafting words that connect and stories that stay.'
-    };
-  }
+  return adminUser;
+}
 
-  removeAdminToken();
-  throw new Error('No active session');
+/**
+ * Log out admin and terminate Supabase authenticated session
+ */
+export async function logoutAdmin(): Promise<void> {
+  try {
+    if (isSupabaseConfigured) {
+      await supabase.auth.signOut();
+    }
+  } catch (err) {
+    console.warn('Supabase signOut error:', err);
+  } finally {
+    removeAdminToken();
+  }
 }
 
 /**

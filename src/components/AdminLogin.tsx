@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { ViewRoute, AdminUser } from '../types';
-import { loginAdmin } from '../lib/api';
-import { Lock, Mail, Eye, EyeOff, Feather, ArrowRight, ShieldCheck } from 'lucide-react';
+import { loginAdmin, resendConfirmationEmail } from '../lib/api';
+import { Lock, Mail, Eye, EyeOff, Feather, ArrowRight, ShieldCheck, Send, CheckCircle2 } from 'lucide-react';
 
 interface AdminLoginProps {
   navigate: (route: ViewRoute) => void;
@@ -14,6 +14,8 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ navigate, onLoginSuccess
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resending, setResending] = useState(false);
+  const [resendNotice, setResendNotice] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -25,6 +27,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ navigate, onLoginSuccess
     try {
       setLoading(true);
       setError(null);
+      setResendNotice(null);
       const res = await loginAdmin(email, password);
       onLoginSuccess(res.admin);
       navigate({ type: 'admin_dashboard' });
@@ -34,6 +37,22 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ navigate, onLoginSuccess
       setLoading(false);
     }
   };
+
+  const handleResendConfirmation = async () => {
+    if (!email) return;
+    try {
+      setResending(true);
+      setResendNotice(null);
+      const res = await resendConfirmationEmail(email);
+      setResendNotice(res.message);
+    } catch (err: any) {
+      setError(err.message || 'Failed to resend confirmation email');
+    } finally {
+      setResending(false);
+    }
+  };
+
+  const isUnconfirmedError = error?.toLowerCase().includes('email confirmation') || error?.toLowerCase().includes('not confirmed');
 
   return (
     <div id="admin-login-page" className="min-h-[80vh] flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">
@@ -69,9 +88,27 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ navigate, onLoginSuccess
             This workspace is reserved solely for the author. Public reader registration is permanently disabled.
           </p>
 
+          {resendNotice && (
+            <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium flex items-start gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <span>{resendNotice}</span>
+            </div>
+          )}
+
           {error && (
-            <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-medium">
-              {error}
+            <div className="p-3.5 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-medium space-y-2">
+              <p>{error}</p>
+              {isUnconfirmedError && (
+                <button
+                  type="button"
+                  onClick={handleResendConfirmation}
+                  disabled={resending}
+                  className="mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0D3B2E] text-[#FAF7F2] text-xs font-medium hover:bg-[#135241] transition-colors disabled:opacity-50"
+                >
+                  <Send className="w-3 h-3 text-[#E4CA7E]" />
+                  <span>{resending ? 'Sending Email...' : 'Resend Verification Email'}</span>
+                </button>
+              )}
             </div>
           )}
 

@@ -365,24 +365,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
 
     const newName = editCatName.trim();
     const newDesc = editCatDesc.trim();
-    const newSlug = newName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
 
     setSavingCategory(true);
     try {
-      // Optimistic update so UI immediately reflects change everywhere
-      setCategories(prev => prev.map(c => 
-        c.id === cat.id ? { ...c, name: newName, slug: newSlug, description: newDesc } : c
-      ));
-
-      if (editCategory === cat.name) {
-        setEditCategory(newName);
-      }
-
+      // Execute the real Supabase database operation directly first
       await updateAdminCategory(cat.id, { name: newName, description: newDesc });
       setEditingCatId(null);
+      // Reload fresh data from Supabase to verify persistence
       await loadAllData();
     } catch (err: any) {
-      console.error('Failed to update category:', err);
+      console.error('Failed to update category in Supabase:', err);
       alert(err.message || 'Failed to update category');
     } finally {
       setSavingCategory(false);
@@ -400,21 +392,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
 
     setDeletingCategory(true);
     try {
-      // Optimistically remove from Categories view and state immediately
-      setCategories(prev => prev.filter(c => c.id !== target.id && c.slug !== target.slug));
-
-      if (editCategory === target.name) {
-        const remaining = categories.filter(c => c.id !== target.id && c.slug !== target.slug);
-        setEditCategory(remaining[0]?.name || 'General');
-      }
-
-      // Permanently delete from Supabase, server, and client storage
+      // Permanently delete directly from Supabase first
       await deleteAdminCategory(target.id);
-
       setCategoryToDelete(null);
+      // Reload fresh data from Supabase
       await loadAllData();
     } catch (err: any) {
-      console.error('Failed to delete category:', err);
+      console.error('Failed to delete category from Supabase:', err);
       alert(err.message || 'Failed to delete category');
     } finally {
       setDeletingCategory(false);
@@ -426,19 +410,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
   const handleMarkRead = async (msg: Message, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     try {
-      // Optimistically remove from UI immediately
-      setMessages(prev => prev.filter(m => m.id !== msg.id));
+      // Permanently delete from Supabase messages and replies table first
+      await deleteAdminMessage(msg.id);
+
       if (selectedMessage?.id === msg.id) {
         setSelectedMessage(null);
       }
-      setStats(prev => prev ? {
-        ...prev,
-        messagesCount: Math.max(0, prev.messagesCount - 1),
-        unreadMessagesCount: Math.max(0, prev.unreadMessagesCount - 1)
-      } : prev);
-
-      // Permanently delete from Supabase messages table
-      await deleteAdminMessage(msg.id);
 
       // Refresh data from Supabase so count always matches actual messages
       const fresh = await fetchAdminMessages();
@@ -483,24 +460,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ admin, navigate,
     const targetId = messageToDelete.id;
     try {
       setDeletingMessage(true);
-      // Immediately remove it from Reader Inbox
-      setMessages(prev => prev.filter(m => m.id !== targetId));
+      // Permanently delete the message and its replies from Supabase first
+      await deleteAdminMessage(targetId);
+
       if (selectedMessage?.id === targetId) {
         setSelectedMessage(null);
       }
-      setStats(prev => prev ? {
-        ...prev,
-        messagesCount: Math.max(0, prev.messagesCount - 1),
-        unreadMessagesCount: Math.max(0, prev.unreadMessagesCount - 1)
-      } : prev);
-
-      const toDelete = messageToDelete;
       setMessageToDelete(null);
 
-      // Permanently delete the message from Supabase
-      await deleteAdminMessage(toDelete.id);
-
-      // Refresh from Supabase to keep count 100% synchronized
+      // Refresh from Supabase to keep count 100% synchronized with database
       const fresh = await fetchAdminMessages();
       setMessages(fresh);
       setStats(prev => prev ? {

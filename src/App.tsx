@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ViewRoute, AdminUser } from './types';
-import { fetchAdminMe, removeAdminToken, recordWebsiteVisitor } from './lib/api';
+import { fetchAdminMe, logoutAdmin, recordWebsiteVisitor } from './lib/api';
 import { Navbar } from './components/Navbar';
 import { Footer } from './components/Footer';
 import { HomePage } from './components/HomePage';
@@ -111,8 +111,8 @@ export default function App() {
     setAdminUser(user);
   };
 
-  const handleLogout = () => {
-    removeAdminToken();
+  const handleLogout = async () => {
+    await logoutAdmin();
     setAdminUser(null);
     navigate({ type: 'admin_login' });
   };
