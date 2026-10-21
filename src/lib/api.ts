@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Article, Category, Message, AdminUser, AdminStats } from '../types';
-import { supabase, isSupabaseConfigured } from './supabase';
+import { supabase, isSupabaseConfigured, isSupabaseReachable } from './supabase';
 import mammoth from 'mammoth';
 
 // Check if string is a valid UUID
@@ -20,15 +20,40 @@ export function generateUuid(): string {
   });
 }
 
+// Token management helpers
+const TOKEN_KEY = 'emioluwa_admin_token';
+
+export function getAdminToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setAdminToken(token: string): void {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function removeAdminToken(): void {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
 /**
- * Check that Supabase is configured; throw error if missing
+ * Universal API helper for server backend endpoints
  */
-function assertSupabaseConfigured() {
-  if (!isSupabaseConfigured) {
-    throw new Error(
-      'Supabase is not configured. Please ensure VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY are set.'
-    );
+async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  const token = getAdminToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers as Record<string, string> || {})
+  };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
   }
+
+  const res = await fetch(endpoint, { ...options, headers });
+  if (!res.ok) {
+    const errBody = await res.json().catch(() => ({}));
+    throw new Error(errBody.error || `Server request failed with status ${res.status}`);
+  }
+  return res.json() as Promise<T>;
 }
 
 /**
@@ -53,7 +78,7 @@ export function broadcastArticlesChanged(reason: string = 'change') {
 }
 
 /**
- * Subscribe to real-time changes to articles, categories, messages, and message_replies in Supabase
+ * Subscribe to real-time changes to articles, categories, and messages
  */
 export function subscribeToArticlesChange(callback: () => void): () => void {
   const handler = () => {
@@ -76,27 +101,20 @@ export function subscribeToArticlesChange(callback: () => void): () => void {
     }
   }
 
-  // Supabase PostgreSQL Realtime subscription
+  // Supabase PostgreSQL Realtime subscription (only if Supabase is configured)
   let realtimeChannel: any = null;
-  try {
-    const channelId = `realtime-portal-${Math.random().toString(36).substring(2, 9)}`;
-    realtimeChannel = supabase
-      .channel(channelId)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'articles' }, () => {
-        callback();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, () => {
-        callback();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => {
-        callback();
-      })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'message_replies' }, () => {
-        callback();
-      })
-      .subscribe();
-  } catch (err) {
-    console.warn('Realtime subscription error:', err);
+  if (isSupabaseConfigured) {
+    try {
+      const channelId = `realtime-desk-${Math.random().toString(36).substring(2, 9)}`;
+      realtimeChannel = supabase
+        .channel(channelId)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'articles' }, () => callback())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'categories' }, () => callback())
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, () => callback())
+        .subscribe();
+    } catch (err) {
+      console.warn('Realtime subscription not active:', err);
+    }
   }
 
   return () => {
@@ -110,7 +128,7 @@ export function subscribeToArticlesChange(callback: () => void): () => void {
         // Ignore
       }
     }
-    if (realtimeChannel) {
+    if (realtimeChannel && isSupabaseConfigured) {
       try {
         supabase.removeChannel(realtimeChannel);
       } catch {
@@ -120,224 +138,179 @@ export function subscribeToArticlesChange(callback: () => void): () => void {
   };
 }
 
-// Helper to map Supabase article row to frontend Article type
-function mapArticleFromDb(row: any): Article {
-  const categoryName = row.categories?.name || row.category || 'General';
-  return {
-    id: row.id,
-    slug: row.slug,
-    title: row.title,
-    excerpt: row.excerpt || '',
-    content: row.content || '',
-    category: categoryName,
-    featuredImage: row.featured_image || 'https://images.unsplash.com/photo-1455390582262-044cdead277a?q=80&w=1200&auto=format&fit=crop',
-    readTime: row.read_time || '4 min read',
-    publishedAt: row.published_at || (row.created_at ? row.created_at.split('T')[0] : '2026-08-20'),
-    status: (row.status === 'published' ? 'published' : 'draft') as 'draft' | 'published',
-    views: typeof row.views === 'number' ? row.views : 0,
-    createdAt: row.created_at || new Date().toISOString(),
-    updatedAt: row.updated_at || new Date().toISOString(),
-  };
-}
-
-// Helper to map Supabase category row to frontend Category type
-function mapCategoryFromDb(row: any, countMap?: Record<string, number>): Category {
-  return {
-    id: row.id,
-    name: row.name,
-    slug: row.slug,
-    description: row.description || '',
-    articleCount: countMap ? countMap[row.id] || countMap[row.name] || 0 : (row.articles ? (Array.isArray(row.articles) ? row.articles.length : row.articles.count || 0) : 0)
-  };
-}
-
-// Helper to map Supabase message row to frontend Message type
-function mapMessageFromDb(row: any): Message {
-  const replies = (row.message_replies || []).map((rep: any) => ({
-    id: rep.id,
-    text: rep.reply_text,
-    sentAt: rep.created_at
-  }));
-
-  return {
-    id: row.id,
-    name: row.name,
-    email: row.email,
-    subject: row.subject || undefined,
-    message: row.message,
-    type: row.type === 'say_hello' ? 'say_hello' : 'contact',
-    read: Boolean(row.read),
-    createdAt: row.created_at,
-    replies: replies.length > 0 ? replies : undefined
-  };
-}
-
-// Token management helpers
-const TOKEN_KEY = 'emioluwa_admin_token';
-
-export function getAdminToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY);
-}
-
-export function setAdminToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function removeAdminToken(): void {
-  localStorage.removeItem(TOKEN_KEY);
-}
-
 // ==============================================================================
-// PUBLIC ENDPOINTS (Read directly from Supabase tables)
+// PUBLIC ENDPOINTS (Dual-engine: Server DB + Supabase sync)
 // ==============================================================================
 
 /**
- * Fetch all published articles directly from Supabase articles table
+ * Fetch all published articles
  */
 export async function fetchPublishedArticles(params?: { category?: string; search?: string; limit?: number }): Promise<Article[]> {
-  assertSupabaseConfigured();
+  try {
+    // 1. Fetch from server backend API (always reliable and instant)
+    const queryParts: string[] = [];
+    if (params?.category && params.category !== 'All') {
+      queryParts.push(`category=${encodeURIComponent(params.category)}`);
+    }
+    if (params?.search && params.search.trim()) {
+      queryParts.push(`search=${encodeURIComponent(params.search.trim())}`);
+    }
+    if (params?.limit) {
+      queryParts.push(`limit=${params.limit}`);
+    }
 
-  let query = supabase
-    .from('articles')
-    .select('*, categories(id, name, slug)')
-    .eq('status', 'published')
-    .order('published_at', { ascending: false });
-
-  if (params?.search && params.search.trim()) {
-    const s = params.search.trim();
-    query = query.or(`title.ilike.%${s}%,excerpt.ilike.%${s}%,content.ilike.%${s}%`);
+    const qs = queryParts.length > 0 ? `?${queryParts.join('&')}` : '';
+    const serverArticles = await apiFetch<Article[]>(`/api/articles${qs}`);
+    if (Array.isArray(serverArticles)) {
+      return serverArticles;
+    }
+  } catch (serverErr) {
+    console.warn('Server articles fetch note:', serverErr);
   }
 
-  if (params?.limit) {
-    query = query.limit(params.limit);
+  // 2. Fallback to Supabase if reachable
+  const reachable = await isSupabaseReachable();
+  if (reachable) {
+    try {
+      let query = supabase
+        .from('articles')
+        .select('*, categories(id, name, slug)')
+        .eq('status', 'published')
+        .order('published_at', { ascending: false });
+
+      if (params?.search && params.search.trim()) {
+        const s = params.search.trim();
+        query = query.or(`title.ilike.%${s}%,excerpt.ilike.%${s}%,content.ilike.%${s}%`);
+      }
+
+      if (params?.limit) {
+        query = query.limit(params.limit);
+      }
+
+      const { data, error } = await query;
+      if (!error && data) {
+        let articles: Article[] = data.map((row: any) => ({
+          id: row.id,
+          slug: row.slug,
+          title: row.title,
+          excerpt: row.excerpt || '',
+          content: row.content || '',
+          category: row.categories?.name || row.category || 'General',
+          featuredImage: row.featured_image || 'https://images.unsplash.com/photo-1455390582262-044cdead277a?q=80&w=1200&auto=format&fit=crop',
+          readTime: row.read_time || '4 min read',
+          publishedAt: row.published_at || (row.created_at ? row.created_at.split('T')[0] : '2026-08-20'),
+          status: (row.status === 'published' ? 'published' : 'draft') as 'draft' | 'published',
+          views: typeof row.views === 'number' ? row.views : 0,
+          createdAt: row.created_at || new Date().toISOString(),
+          updatedAt: row.updated_at || new Date().toISOString(),
+        }));
+
+        if (params?.category && params.category !== 'All') {
+          const target = params.category.toLowerCase();
+          articles = articles.filter(a => a.category.toLowerCase() === target);
+        }
+
+        return articles;
+      }
+    } catch (supErr) {
+      console.warn('Supabase fallback note:', supErr);
+    }
   }
 
-  const { data, error } = await query;
-  if (error) {
-    console.error('Supabase fetchPublishedArticles error:', error);
-    throw new Error(`Database error fetching articles: ${error.message}`);
-  }
-
-  let articles = (data || []).map(mapArticleFromDb);
-
-  // Filter by category if requested
-  if (params?.category && params.category !== 'All') {
-    const target = params.category.toLowerCase();
-    articles = articles.filter(a =>
-      a.category.toLowerCase() === target ||
-      a.category.toLowerCase().replace(/[^a-z0-9]+/g, '-') === target
-    );
-  }
-
-  return articles;
+  return [];
 }
 
 /**
- * Fetch a single article by slug directly from Supabase articles table
+ * Fetch a single article by slug
  */
 export async function fetchArticleBySlug(slug: string): Promise<{ article: Article; related: Article[] }> {
-  assertSupabaseConfigured();
-
-  const { data, error } = await supabase
-    .from('articles')
-    .select('*, categories(id, name, slug)')
-    .eq('slug', slug)
-    .maybeSingle();
-
-  if (error) {
-    console.error('Supabase fetchArticleBySlug error:', error);
-    throw new Error(`Database error: ${error.message}`);
-  }
-
-  if (!data) {
-    throw new Error('Article not found');
-  }
-
-  const article = mapArticleFromDb(data);
-
-  // Increment views if RPC exists
   try {
-    await supabase.rpc('increment_article_views', { article_slug: slug });
-  } catch {
-    // If RPC is not created, update views column directly
+    const res = await apiFetch<{ article: Article; related?: Article[] }>(`/api/articles/${encodeURIComponent(slug)}`);
+    if (res?.article) {
+      return {
+        article: res.article,
+        related: res.related || []
+      };
+    }
+  } catch (serverErr) {
+    console.warn('Server article by slug note:', serverErr);
+  }
+
+  // Fallback to Supabase if reachable
+  const reachable = await isSupabaseReachable();
+  if (reachable) {
     try {
-      await supabase
+      const { data, error } = await supabase
         .from('articles')
-        .update({ views: (article.views || 0) + 1 })
-        .eq('id', article.id);
-    } catch {}
+        .select('*, categories(id, name, slug)')
+        .eq('slug', slug)
+        .maybeSingle();
+
+      if (!error && data) {
+        const article: Article = {
+          id: data.id,
+          slug: data.slug,
+          title: data.title,
+          excerpt: data.excerpt || '',
+          content: data.content || '',
+          category: data.categories?.name || data.category || 'General',
+          featuredImage: data.featured_image || 'https://images.unsplash.com/photo-1455390582262-044cdead277a?q=80&w=1200&auto=format&fit=crop',
+          readTime: data.read_time || '4 min read',
+          publishedAt: data.published_at || (data.created_at ? data.created_at.split('T')[0] : '2026-08-20'),
+          status: data.status as 'draft' | 'published',
+          views: (data.views || 0) + 1,
+          createdAt: data.created_at || new Date().toISOString(),
+          updatedAt: data.updated_at || new Date().toISOString(),
+        };
+
+        return { article, related: [] };
+      }
+    } catch (supErr) {
+      console.warn('Supabase fetchArticleBySlug note:', supErr);
+    }
   }
 
-  // Fetch related articles directly from Supabase
-  let related: Article[] = [];
-  try {
-    let relQuery = supabase
-      .from('articles')
-      .select('*, categories(id, name, slug)')
-      .eq('status', 'published')
-      .neq('id', article.id);
-
-    if (data.category_id) {
-      relQuery = relQuery.eq('category_id', data.category_id);
-    }
-
-    const { data: relData } = await relQuery.limit(3);
-    if (relData) {
-      related = relData.map(mapArticleFromDb);
-    }
-  } catch (relErr) {
-    console.warn('Could not fetch related articles:', relErr);
-  }
-
-  return { article, related };
+  throw new Error('Article not found');
 }
 
 /**
- * Fetch all categories directly from Supabase categories table
+ * Fetch all categories
  */
 export async function fetchCategories(): Promise<Category[]> {
-  assertSupabaseConfigured();
-
-  const { data: cats, error: catError } = await supabase
-    .from('categories')
-    .select('*')
-    .order('name', { ascending: true });
-
-  if (catError) {
-    console.error('Supabase fetchCategories error:', catError);
-    throw new Error(`Database error fetching categories: ${catError.message}`);
+  try {
+    const serverCategories = await apiFetch<Category[]>('/api/categories');
+    if (Array.isArray(serverCategories)) {
+      return serverCategories;
+    }
+  } catch (serverErr) {
+    console.warn('Server categories fetch note:', serverErr);
   }
 
-  if (!cats) return [];
-
-  // Compute published article counts per category directly from Supabase
-  const { data: artCounts, error: countError } = await supabase
-    .from('articles')
-    .select('category_id, status')
-    .eq('status', 'published');
-
-  if (countError) {
-    console.warn('Could not compute category counts:', countError);
-  }
-
-  const countMap: Record<string, number> = {};
-  if (artCounts) {
-    artCounts.forEach((row: any) => {
-      if (row.category_id) {
-        countMap[row.category_id] = (countMap[row.category_id] || 0) + 1;
+  const reachable = await isSupabaseReachable();
+  if (reachable) {
+    try {
+      const { data, error } = await supabase.from('categories').select('*').order('name', { ascending: true });
+      if (!error && data) {
+        return data.map((c: any) => ({
+          id: c.id,
+          name: c.name,
+          slug: c.slug,
+          description: c.description || '',
+          articleCount: 0
+        }));
       }
-    });
+    } catch (supErr) {
+      console.warn('Supabase fetchCategories note:', supErr);
+    }
   }
 
-  return cats.map(c => mapCategoryFromDb(c, countMap));
+  return [];
 }
 
 /**
- * Submit Contact Form directly to Supabase messages table
+ * Submit Contact Form
  */
 export async function submitContactForm(data: { name: string; email: string; subject?: string; message: string }): Promise<{ success: boolean; message: string }> {
-  assertSupabaseConfigured();
-
   if (!data.name?.trim() || !data.email?.trim() || !data.message?.trim()) {
     throw new Error('Please provide your name, email, and message.');
   }
@@ -347,63 +320,84 @@ export async function submitContactForm(data: { name: string; email: string; sub
     email: data.email.trim().toLowerCase(),
     subject: data.subject?.trim() || 'General Inquiry',
     message: data.message.trim(),
-    type: 'contact',
-    read: false
   };
 
-  const { error } = await supabase
-    .from('messages')
-    .insert([payload]);
+  // 1. Submit to server backend
+  const res = await apiFetch<{ success: boolean; message: string }>('/api/contact', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
 
-  if (error) {
-    console.error('Supabase contact message error:', error);
-    throw new Error(`Failed to send message: ${error.message}`);
+  // 2. Dual-persist to Supabase if reachable
+  const reachable = await isSupabaseReachable();
+  if (reachable) {
+    try {
+      await supabase.from('messages').insert([{
+        id: generateUuid(),
+        name: payload.name,
+        email: payload.email,
+        subject: payload.subject,
+        message: payload.message,
+        type: 'contact',
+        read: false,
+        created_at: new Date().toISOString()
+      }]);
+    } catch (supErr) {
+      console.warn('Supabase background message sync note:', supErr);
+    }
   }
 
   broadcastArticlesChanged('message:received');
-  return { success: true, message: 'Your message has been sent to Emioluwa. Thank you for reaching out!' };
+  return res;
 }
 
 /**
- * Submit "Say Hello" note directly to Supabase messages table
+ * Submit Say Hello Note
  */
 export async function submitSayHello(data: { name: string; email: string; message: string }): Promise<{ success: boolean; message: string }> {
-  assertSupabaseConfigured();
-
   if (!data.name?.trim() || !data.email?.trim() || !data.message?.trim()) {
-    throw new Error('Please fill in all fields before sending your hello.');
+    throw new Error('Please provide your name, email, and message.');
   }
 
   const payload = {
     name: data.name.trim(),
     email: data.email.trim().toLowerCase(),
     message: data.message.trim(),
-    type: 'say_hello',
-    read: false
   };
 
-  const { error } = await supabase
-    .from('messages')
-    .insert([payload]);
+  const res = await apiFetch<{ success: boolean; message: string }>('/api/say-hello', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
 
-  if (error) {
-    console.error('Supabase say hello error:', error);
-    throw new Error(`Failed to send note: ${error.message}`);
+  const reachable = await isSupabaseReachable();
+  if (reachable) {
+    try {
+      await supabase.from('messages').insert([{
+        id: generateUuid(),
+        name: payload.name,
+        email: payload.email,
+        subject: 'Say Hello Note',
+        message: payload.message,
+        type: 'say_hello',
+        read: false,
+        created_at: new Date().toISOString()
+      }]);
+    } catch (supErr) {
+      console.warn('Supabase background say-hello sync note:', supErr);
+    }
   }
 
   broadcastArticlesChanged('message:received');
-  return { success: true, message: 'Your note has been received! Emioluwa reads every reader note.' };
+  return res;
 }
 
 // ==============================================================================
-// AUTHENTICATION & ADMIN PROFILE
-// ==============================================================================
-// AUTHENTICATION & ADMIN PROFILE
+// AUTHENTICATION & AUTHOR PROFILE
 // ==============================================================================
 
 export const AUTHORIZED_ADMIN_EMAIL = 'emioluwawrites@gmail.com';
 
-// Author profile cache and reactive subscribers
 export interface AuthorProfile {
   name: string;
   bio: string;
@@ -428,30 +422,45 @@ export function subscribeToAuthorProfile(listener: (profile: AuthorProfile) => v
 }
 
 export async function fetchAuthorProfile(): Promise<AuthorProfile> {
-  if (!isSupabaseConfigured) return cachedAuthorProfile;
-
   try {
-    const { data: profile, error } = await supabase
-      .from('profiles')
-      .select('name, bio, email, avatar_url')
-      .eq('role', 'admin')
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-
-    if (!error && profile) {
+    const res = await apiFetch<AuthorProfile>('/api/author-profile');
+    if (res?.name) {
       cachedAuthorProfile = {
-        name: profile.name || cachedAuthorProfile.name,
-        bio: profile.bio || cachedAuthorProfile.bio,
-        email: profile.email || cachedAuthorProfile.email,
-        avatar_url: profile.avatar_url
+        name: res.name || cachedAuthorProfile.name,
+        bio: res.bio || cachedAuthorProfile.bio,
+        email: res.email || cachedAuthorProfile.email,
+        avatar_url: res.avatar_url || cachedAuthorProfile.avatar_url
       };
       authorProfileListeners.forEach(cb => cb(cachedAuthorProfile));
       return cachedAuthorProfile;
     }
-  } catch (err) {
-    console.warn('Could not load author profile from Supabase:', err);
+  } catch {
+    // Ignore server profile fetch error
   }
+
+  const reachable = await isSupabaseReachable();
+  if (reachable) {
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('name, bio, email, avatar_url')
+        .eq('role', 'admin')
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle();
+
+      if (profile) {
+        cachedAuthorProfile = {
+          name: profile.name || cachedAuthorProfile.name,
+          bio: profile.bio || cachedAuthorProfile.bio,
+          email: profile.email || cachedAuthorProfile.email,
+          avatar_url: profile.avatar_url
+        };
+        authorProfileListeners.forEach(cb => cb(cachedAuthorProfile));
+      }
+    } catch {}
+  }
+
   return cachedAuthorProfile;
 }
 
@@ -468,180 +477,87 @@ export function useAuthorProfile(): AuthorProfile {
 }
 
 /**
- * Log in admin using author credentials via real Supabase Auth
- * Strictly uses the real Supabase session for all downstream database operations (RLS).
+ * Log in admin using author credentials
  */
 export async function loginAdmin(email: string, password: string): Promise<{ success: boolean; token: string; admin: AdminUser }> {
-  assertSupabaseConfigured();
-
   const cleanEmail = email.trim().toLowerCase();
   const cleanPass = password.trim();
 
-  // Strict check: Only authorized author account is permitted
-  // Verify against AUTHORIZED_ADMIN_EMAIL or active admin profile email in Supabase
-  let activeAdminEmail = AUTHORIZED_ADMIN_EMAIL;
-  try {
-    const { data: adminProfile } = await supabase
-      .from('profiles')
-      .select('email')
-      .eq('role', 'admin')
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    if (adminProfile?.email) {
-      activeAdminEmail = adminProfile.email.toLowerCase().trim();
-    }
-  } catch {
-    // Fall back to default
-  }
-
-  if (cleanEmail !== AUTHORIZED_ADMIN_EMAIL && cleanEmail !== activeAdminEmail) {
-    throw new Error('Access denied. Only the authorized author account is permitted to access the Admin Dashboard.');
-  }
-
-  // Official Supabase Auth (Mandatory for real RLS policies & persistence)
-  const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-    email: cleanEmail,
-    password: cleanPass
+  // 1. Authenticate with server API
+  const res = await apiFetch<{ success: boolean; token: string; admin: AdminUser }>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email: cleanEmail, password: cleanPass })
   });
 
-  if (authError) {
-    if (authError.code === 'email_not_confirmed' || authError.message?.toLowerCase().includes('email not confirmed')) {
-      throw new Error('Access denied: Account email is not confirmed in Supabase.');
+  if (res?.token) {
+    setAdminToken(res.token);
+
+    // Sync profile cache
+    cachedAuthorProfile = {
+      name: res.admin.name || 'Emioluwa',
+      bio: res.admin.bio || cachedAuthorProfile.bio,
+      email: res.admin.email || cleanEmail
+    };
+    authorProfileListeners.forEach(cb => cb(cachedAuthorProfile));
+
+    // Also attempt Supabase sign-in in background if reachable
+    const reachable = await isSupabaseReachable();
+    if (reachable) {
+      try {
+        await supabase.auth.signInWithPassword({
+          email: cleanEmail,
+          password: cleanPass
+        });
+      } catch (supErr) {
+        console.warn('Supabase secondary login sync note:', supErr);
+      }
     }
-    if (authError.code === 'invalid_credentials' || authError.message?.toLowerCase().includes('invalid login credentials')) {
-      throw new Error('Invalid email or password.');
-    }
-    throw new Error(authError.message || 'Supabase authentication failed.');
+
+    return res;
   }
 
-  if (!authData?.session || !authData.user) {
-    throw new Error('Supabase authentication failed: No active session was returned by Supabase.');
-  }
-
-  // Unconfirmed users cannot access the dashboard
-  const user = authData.user;
-  if (!user.email_confirmed_at && !user.confirmed_at) {
-    await supabase.auth.signOut();
-    throw new Error('Access denied: Account email is not confirmed in Supabase.');
-  }
-
-  const token = authData.session.access_token;
-  setAdminToken(token);
-
-  let adminUser: AdminUser = {
-    id: authData.user.id,
-    email: authData.user.email || cleanEmail,
-    name: 'Emioluwa',
-    bio: 'Young Nigerian writer, essayist, and student crafting words that connect and stories that stay.'
-  };
-
-  try {
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', authData.user.id)
-      .maybeSingle();
-
-    if (profile) {
-      adminUser.name = profile.name || adminUser.name;
-      adminUser.bio = profile.bio || adminUser.bio;
-      adminUser.email = profile.email || adminUser.email;
-    }
-  } catch (err) {
-    console.warn('Could not load profile from Supabase:', err);
-  }
-
-  // Sync cache
-  cachedAuthorProfile = {
-    name: adminUser.name,
-    bio: adminUser.bio,
-    email: adminUser.email
-  };
-  authorProfileListeners.forEach(cb => cb(cachedAuthorProfile));
-
-  return { success: true, token, admin: adminUser };
+  throw new Error('Authentication failed');
 }
 
 /**
- * Fetch currently authenticated admin user strictly from real Supabase session
+ * Fetch currently authenticated admin user
  */
 export async function fetchAdminMe(): Promise<AdminUser> {
-  assertSupabaseConfigured();
-
-  const { data: authData, error: authError } = await supabase.auth.getUser();
-
-  if (authError || !authData?.user) {
-    removeAdminToken();
-    throw new Error('Not authenticated with Supabase.');
+  const token = getAdminToken();
+  if (!token) {
+    throw new Error('No active admin session found');
   }
 
-  const user = authData.user;
-  const userEmail = (user.email || '').toLowerCase().trim();
-
-  // Load profile from Supabase profiles table
-  let profile: any = null;
   try {
-    const { data: profData } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', user.id)
-      .maybeSingle();
-    profile = profData;
-  } catch (err) {
-    console.warn('Could not load profile in fetchAdminMe:', err);
-  }
-
-  const profileEmail = (profile?.email || '').toLowerCase().trim();
-  const isAuthorized = (
-    userEmail === AUTHORIZED_ADMIN_EMAIL ||
-    profileEmail === userEmail ||
-    profile?.role === 'admin'
-  );
-
-  // Strict check: Only the single authorized admin account is permitted
-  if (!isAuthorized) {
-    await supabase.auth.signOut();
+    const admin = await apiFetch<AdminUser>('/api/admin/me');
+    if (admin) {
+      cachedAuthorProfile = {
+        name: admin.name || cachedAuthorProfile.name,
+        bio: admin.bio || cachedAuthorProfile.bio,
+        email: admin.email || cachedAuthorProfile.email
+      };
+      authorProfileListeners.forEach(cb => cb(cachedAuthorProfile));
+      return admin;
+    }
+  } catch (err: any) {
     removeAdminToken();
-    throw new Error('Access denied. Unauthorized account.');
+    throw new Error(err.message || 'Session expired. Please log in again.');
   }
 
-  // Strict check: Unconfirmed users cannot access the dashboard
-  if (!user.email_confirmed_at && !user.confirmed_at) {
-    await supabase.auth.signOut();
-    removeAdminToken();
-    throw new Error('Access denied: Account email is not confirmed.');
-  }
-
-  const adminUser: AdminUser = {
-    id: user.id,
-    email: profile?.email || user.email || AUTHORIZED_ADMIN_EMAIL,
-    name: profile?.name || 'Emioluwa',
-    bio: profile?.bio || 'Young Nigerian writer, essayist, and student crafting words that connect and stories that stay.'
-  };
-
-  // Sync cache
-  cachedAuthorProfile = {
-    name: adminUser.name,
-    bio: adminUser.bio,
-    email: adminUser.email,
-    avatar_url: profile?.avatar_url
-  };
-  authorProfileListeners.forEach(cb => cb(cachedAuthorProfile));
-
-  return adminUser;
+  throw new Error('Unable to verify session');
 }
 
 /**
- * Log out admin and terminate Supabase authenticated session
+ * Log out admin
  */
 export async function logoutAdmin(): Promise<void> {
   try {
-    if (isSupabaseConfigured) {
+    const reachable = await isSupabaseReachable();
+    if (reachable) {
       await supabase.auth.signOut();
     }
-  } catch (err) {
-    console.warn('Supabase signOut error:', err);
+  } catch {
+    // Ignore
   } finally {
     removeAdminToken();
   }
@@ -657,36 +573,16 @@ export interface UpdateAdminProfileInput {
 }
 
 /**
- * Update Admin Profile & Credentials directly in Supabase
+ * Update Admin Profile & Credentials
  */
 export async function updateAdminProfile(data: UpdateAdminProfileInput): Promise<{
   success: boolean;
   admin: AdminUser;
   message: string;
 }> {
-  assertSupabaseConfigured();
-
-  // 1. Get currently authenticated Supabase admin user
-  const { data: authData, error: authError } = await supabase.auth.getUser();
-  if (authError || !authData?.user) {
-    throw new Error('Not authenticated. Please log in to update your profile.');
-  }
-
-  const user = authData.user;
-  const currentEmail = user.email || '';
-  const userId = user.id;
-
-  // 2. Change Password Flow (if any password field is populated)
-  const hasPasswordAttempt = Boolean(data.currentPassword || data.newPassword || data.confirmPassword);
-  if (hasPasswordAttempt) {
+  if (data.newPassword) {
     if (!data.currentPassword) {
-      throw new Error('Please enter your current password to verify your identity before changing your password.');
-    }
-    if (!data.newPassword) {
-      throw new Error('Please enter your new password.');
-    }
-    if (!data.confirmPassword) {
-      throw new Error('Please confirm your new password.');
+      throw new Error('Current password is required to set a new password.');
     }
     if (data.newPassword !== data.confirmPassword) {
       throw new Error('New password and confirmation password do not match.');
@@ -694,486 +590,205 @@ export async function updateAdminProfile(data: UpdateAdminProfileInput): Promise
     if (data.newPassword.length < 6) {
       throw new Error('New password must be at least 6 characters long.');
     }
-
-    // Verify current password with Supabase Authentication securely
-    const { error: verifyErr } = await supabase.auth.signInWithPassword({
-      email: currentEmail,
-      password: data.currentPassword
-    });
-
-    if (verifyErr) {
-      throw new Error('Current password is incorrect. Verification failed.');
-    }
-
-    // Update password securely through Supabase Authentication
-    const { error: passError } = await supabase.auth.updateUser({
-      password: data.newPassword
-    });
-
-    if (passError) {
-      throw new Error(passError.message || 'Failed to update password in Supabase.');
-    }
   }
 
-  // 3. Admin Email Update
-  let emailNotice: string | null = null;
-  let targetEmail = currentEmail;
+  // 1. Update on server backend
+  const res = await apiFetch<{ success: boolean; admin: AdminUser; message: string }>('/api/admin/profile', {
+    method: 'PUT',
+    body: JSON.stringify(data)
+  });
 
-  if (data.email) {
-    const cleanEmail = data.email.trim().toLowerCase();
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(cleanEmail)) {
-      throw new Error('Please enter a valid email address.');
-    }
-
-    if (cleanEmail !== currentEmail.toLowerCase()) {
-      // Update the authenticated Supabase user's email securely
-      const { data: emailRes, error: emailErr } = await supabase.auth.updateUser({
-        email: cleanEmail
-      });
-
-      if (emailErr) {
-        throw new Error(emailErr.message || 'Failed to update email in Supabase Authentication.');
-      }
-
-      targetEmail = cleanEmail;
-      if (emailRes?.user && (emailRes.user as any).new_email) {
-        emailNotice = 'A confirmation email was sent to your new address to complete the email change.';
-      }
-    }
-  }
-
-  // 4. Update Profile in Supabase `profiles` table
-  const profileUpdates: Record<string, any> = {
-    updated_at: new Date().toISOString()
-  };
-  if (data.name !== undefined) profileUpdates.name = data.name.trim();
-  if (data.bio !== undefined) profileUpdates.bio = data.bio.trim();
-  if (targetEmail) profileUpdates.email = targetEmail;
-
-  // Check if profile exists in public.profiles
-  const { data: existingProfile } = await supabase
-    .from('profiles')
-    .select('id')
-    .eq('id', userId)
-    .maybeSingle();
-
-  if (existingProfile) {
-    const { error: profileError } = await supabase
-      .from('profiles')
-      .update(profileUpdates)
-      .eq('id', userId);
-
-    if (profileError) {
-      throw new Error(profileError.message || 'Failed to update profile in Supabase database.');
-    }
-  } else {
-    const { error: insertError } = await supabase
-      .from('profiles')
-      .insert([{
-        id: userId,
-        role: 'admin',
-        ...profileUpdates
-      }]);
-
-    if (insertError) {
-      throw new Error(insertError.message || 'Failed to create profile in Supabase database.');
-    }
-  }
-
-  // Update cached profile and notify all subscriber components
+  // 2. Update cached author profile
   cachedAuthorProfile = {
     ...cachedAuthorProfile,
-    name: data.name !== undefined ? data.name.trim() : cachedAuthorProfile.name,
-    bio: data.bio !== undefined ? data.bio.trim() : cachedAuthorProfile.bio,
-    email: targetEmail || cachedAuthorProfile.email
+    name: res.admin.name || cachedAuthorProfile.name,
+    bio: res.admin.bio || cachedAuthorProfile.bio,
+    email: res.admin.email || cachedAuthorProfile.email
   };
   authorProfileListeners.forEach(cb => cb(cachedAuthorProfile));
 
-  // Broadcast change event
-  broadcastArticlesChanged('profile:updated');
-
-  // Fetch freshly updated admin object directly from Supabase
-  const updatedAdmin = await fetchAdminMe();
-
-  let message = 'Profile settings updated successfully in Supabase!';
-  if (hasPasswordAttempt && emailNotice) {
-    message = `Password changed successfully! ${emailNotice}`;
-  } else if (hasPasswordAttempt) {
-    message = 'Password changed and profile settings updated successfully!';
-  } else if (emailNotice) {
-    message = `Profile settings saved! ${emailNotice}`;
+  // 3. Dual-persist to Supabase if reachable
+  const reachable = await isSupabaseReachable();
+  if (reachable) {
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      if (authData?.user) {
+        if (data.newPassword) {
+          await supabase.auth.updateUser({ password: data.newPassword });
+        }
+        if (data.email) {
+          await supabase.auth.updateUser({ email: data.email.trim().toLowerCase() });
+        }
+        await supabase
+          .from('profiles')
+          .update({
+            name: res.admin.name,
+            bio: res.admin.bio,
+            email: res.admin.email,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', authData.user.id);
+      }
+    } catch (supErr) {
+      console.warn('Supabase profile dual-sync note:', supErr);
+    }
   }
 
-  return {
-    success: true,
-    admin: updatedAdmin,
-    message
-  };
+  broadcastArticlesChanged('profile:updated');
+  return res;
 }
 
 // ==============================================================================
-// DASHBOARD STATS & ANALYTICS (Directly from Supabase)
+// DASHBOARD STATS & ANALYTICS
 // ==============================================================================
 
-/**
- * Record a unique website visitor in Supabase.
- * Checks localStorage to deduplicate so refreshing or navigating within the
- * same browser never records another visitor.
- */
 export async function recordWebsiteVisitor(): Promise<void> {
-  const VISITOR_KEY = 'emioluwa_unique_visitor_recorded';
+  const VISITOR_KEY = 'emioluwa_visitor_counted';
   if (typeof window === 'undefined') return;
-
-  // If this browser has already been counted, do nothing on refresh or re-navigation
-  if (localStorage.getItem(VISITOR_KEY)) {
-    return;
-  }
-
-  // Mark this browser as counted
+  if (localStorage.getItem(VISITOR_KEY)) return;
   localStorage.setItem(VISITOR_KEY, 'true');
 
-  try {
-    const visitorId = generateUuid();
-    // 1. Try to record into website_views table in Supabase
-    const { error: viewsErr } = await supabase
-      .from('website_views')
-      .insert([{ visitor_id: visitorId, created_at: new Date().toISOString() }]);
-
-    if (!viewsErr) {
-      return;
-    }
-
-    // 2. If website_views table is not created yet, increment views on the primary published article in Supabase
-    const { data: primaryArticle } = await supabase
-      .from('articles')
-      .select('id, views')
-      .eq('status', 'published')
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle();
-
-    if (primaryArticle) {
-      const nextViews = (primaryArticle.views || 0) + 1;
-      await supabase
-        .from('articles')
-        .update({ views: nextViews, updated_at: new Date().toISOString() })
-        .eq('id', primaryArticle.id);
-    }
-  } catch (err) {
-    console.warn('Could not record website visitor in Supabase:', err);
+  const reachable = await isSupabaseReachable();
+  if (reachable) {
+    try {
+      await supabase.from('website_views').insert([{
+        visitor_id: generateUuid(),
+        created_at: new Date().toISOString()
+      }]);
+    } catch {}
   }
 }
 
-/**
- * Fetch total unique visitors directly from Supabase
- */
 export async function fetchWebsiteVisitorsCount(): Promise<number> {
-  assertSupabaseConfigured();
-
-  // 1. Check dedicated website_views table in Supabase
   try {
-    const { count, error } = await supabase
-      .from('website_views')
-      .select('*', { count: 'exact', head: true });
-
-    if (!error && typeof count === 'number') {
-      return count;
-    }
-  } catch {}
-
-  // 2. Read unique views recorded across Supabase articles table
-  try {
-    const { data, error } = await supabase
-      .from('articles')
-      .select('views');
-
-    if (!error && data) {
-      return data.reduce((sum, item) => sum + (item.views || 0), 0);
-    }
-  } catch {}
-
-  return 0;
+    const stats = await apiFetch<AdminStats>('/api/admin/stats');
+    return stats.totalViews || 0;
+  } catch {
+    return 0;
+  }
 }
 
-/**
- * Fetch all admin stats directly from Supabase
- */
 export async function fetchAdminStats(): Promise<AdminStats> {
-  const [allArticles, categoriesRes, allMessages, totalViews] = await Promise.all([
-    fetchAdminArticles(),
-    fetchCategories(),
-    fetchAdminMessages(),
-    fetchWebsiteVisitorsCount()
-  ]);
-
-  const publishedCount = allArticles.filter(a => a.status === 'published').length;
-  const draftCount = allArticles.filter(a => a.status === 'draft').length;
-  const categoriesCount = categoriesRes.length;
-  const messagesCount = allMessages.length;
-  const unreadMessagesCount = allMessages.length; // Inbox count always matches actual Supabase messages
-
-  return {
-    publishedCount,
-    draftCount,
-    totalArticles: allArticles.length,
-    categoriesCount,
-    messagesCount,
-    unreadMessagesCount,
-    totalViews,
-    recentArticles: allArticles.slice(0, 5),
-    recentMessages: allMessages.slice(0, 5)
-  };
+  return apiFetch<AdminStats>('/api/admin/stats');
 }
 
 // ==============================================================================
-// ADMIN ARTICLES CRUD (Exclusively in Supabase)
+// ADMIN ARTICLES CRUD
 // ==============================================================================
 
-/**
- * Fetch all admin articles directly from Supabase articles table
- */
 export async function fetchAdminArticles(): Promise<Article[]> {
-  assertSupabaseConfigured();
-
-  const { data, error } = await supabase
-    .from('articles')
-    .select('*, categories(id, name, slug)')
-    .order('created_at', { ascending: false });
-
-  if (error) {
-    console.error('Supabase fetchAdminArticles error:', error);
-    throw new Error(`Database error fetching articles: ${error.message}`);
-  }
-
-  return (data || []).map(mapArticleFromDb);
+  return apiFetch<Article[]>('/api/admin/articles');
 }
 
-/**
- * Helper to ensure a category exists in Supabase and return its UUID
- */
-async function getOrCreateCategoryId(categoryName: string): Promise<string> {
-  assertSupabaseConfigured();
-  const cleanName = categoryName.trim();
-  const slug = cleanName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
-
-  // 1. Look up existing by name or slug
-  const { data: existing, error: findError } = await supabase
-    .from('categories')
-    .select('id')
-    .or(`name.ilike.${cleanName},slug.eq.${slug}`)
-    .maybeSingle();
-
-  if (existing?.id) {
-    return existing.id;
-  }
-
-  // 2. Insert new category into Supabase
-  const newCatId = generateUuid();
-  const { data: newCat, error: insertError } = await supabase
-    .from('categories')
-    .insert([{ id: newCatId, name: cleanName, slug, description: `${cleanName} essays & reflections` }])
-    .select('id')
-    .single();
-
-  if (!insertError && newCat?.id) {
-    return newCat.id;
-  }
-
-  // 3. If insert failed (e.g. race condition), grab any existing category
-  const { data: firstCat } = await supabase.from('categories').select('id').limit(1).maybeSingle();
-  if (firstCat?.id) return firstCat.id;
-
-  throw new Error(`Could not find or create category "${categoryName}" in Supabase.`);
-}
-
-/**
- * Create a new article directly in Supabase articles table
- */
 export async function createAdminArticle(article: Partial<Article>): Promise<Article> {
-  assertSupabaseConfigured();
-
-  if (!article.title?.trim() || !article.content?.trim()) {
-    throw new Error('Title and content are required.');
+  if (!article.title?.trim() || !article.content?.trim() || !article.category?.trim()) {
+    throw new Error('Title, content, and category are required.');
   }
 
-  const { data: authData } = await supabase.auth.getUser();
-  const authorId = authData?.user?.id && isValidUuid(authData.user.id) ? authData.user.id : null;
+  const created = await apiFetch<Article>('/api/admin/articles', {
+    method: 'POST',
+    body: JSON.stringify(article)
+  });
 
-  const categoryId = await getOrCreateCategoryId(article.category || 'Personal Growth');
-
-  const slug = (article.slug || article.title)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/(^-|-$)+/g, '');
-
-  const newId = generateUuid();
-  const now = new Date().toISOString();
-  const calculatedReadTime = article.readTime || `${Math.max(1, Math.ceil(article.content.split(/\s+/).length / 200))} min read`;
-  const excerpt = article.excerpt?.trim() || article.content.substring(0, 160).replace(/[#*`_]/g, '').trim() + '...';
-
-  const insertData: Record<string, any> = {
-    id: newId,
-    title: article.title.trim(),
-    slug: slug || `essay-${Date.now()}`,
-    excerpt,
-    content: article.content.trim(),
-    category_id: categoryId,
-    featured_image: article.featuredImage || 'https://images.unsplash.com/photo-1455390582262-044cdead277a?q=80&w=1200&auto=format&fit=crop',
-    read_time: calculatedReadTime,
-    status: (article.status as 'published' | 'draft') || 'published',
-    views: 0,
-    published_at: article.publishedAt || now.split('T')[0],
-    created_at: now,
-    updated_at: now
-  };
-
-  if (authorId) {
-    insertData.author_id = authorId;
+  // Dual sync to Supabase if reachable
+  const reachable = await isSupabaseReachable();
+  if (reachable) {
+    try {
+      await supabase.from('articles').insert([{
+        id: generateUuid(),
+        title: created.title,
+        slug: created.slug,
+        excerpt: created.excerpt,
+        content: created.content,
+        category: created.category,
+        featured_image: created.featuredImage,
+        read_time: created.readTime,
+        status: created.status,
+        published_at: created.publishedAt,
+        views: created.views || 0,
+        created_at: created.createdAt,
+        updated_at: created.updatedAt
+      }]);
+    } catch (supErr) {
+      console.warn('Supabase article sync note:', supErr);
+    }
   }
 
-  const { data, error } = await supabase
-    .from('articles')
-    .insert([insertData])
-    .select('*, categories(id, name, slug)')
-    .single();
-
-  if (error) {
-    console.error('Supabase article insert error:', error);
-    throw new Error(`Failed to create article in database: ${error.message}`);
-  }
-
-  const created = mapArticleFromDb(data);
   broadcastArticlesChanged('article:created');
   return created;
 }
 
-/**
- * Update an existing article directly in Supabase articles table
- */
 export async function updateAdminArticle(id: string, article: Partial<Article>): Promise<Article> {
-  assertSupabaseConfigured();
+  const updated = await apiFetch<Article>(`/api/admin/articles/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(article)
+  });
 
-  let targetId = id;
-  if (!isValidUuid(targetId)) {
-    const { data: bySlug } = await supabase.from('articles').select('id').eq('slug', id).maybeSingle();
-    if (bySlug?.id) targetId = bySlug.id;
+  const reachable = await isSupabaseReachable();
+  if (reachable) {
+    try {
+      await supabase
+        .from('articles')
+        .update({
+          title: updated.title,
+          slug: updated.slug,
+          excerpt: updated.excerpt,
+          content: updated.content,
+          category: updated.category,
+          featured_image: updated.featuredImage,
+          read_time: updated.readTime,
+          status: updated.status,
+          published_at: updated.publishedAt,
+          updated_at: updated.updatedAt
+        })
+        .or(`id.eq.${id},slug.eq.${id}`);
+    } catch (supErr) {
+      console.warn('Supabase article update sync note:', supErr);
+    }
   }
 
-  if (!isValidUuid(targetId)) {
-    throw new Error(`Article with id or slug "${id}" not found in Supabase.`);
-  }
-
-  const updates: Record<string, any> = {
-    updated_at: new Date().toISOString()
-  };
-
-  if (article.title) updates.title = article.title.trim();
-  if (article.slug) updates.slug = article.slug.trim();
-  if (article.excerpt !== undefined) updates.excerpt = article.excerpt;
-  if (article.content !== undefined) updates.content = article.content;
-  if (article.featuredImage) updates.featured_image = article.featuredImage;
-  if (article.readTime) updates.read_time = article.readTime;
-  if (article.status) updates.status = article.status;
-  if (article.publishedAt) updates.published_at = article.publishedAt;
-
-  if (article.category) {
-    const catId = await getOrCreateCategoryId(article.category);
-    updates.category_id = catId;
-  }
-
-  const { data, error } = await supabase
-    .from('articles')
-    .update(updates)
-    .eq('id', targetId)
-    .select('*, categories(id, name, slug)')
-    .single();
-
-  if (error) {
-    console.error('Supabase article update error:', error);
-    throw new Error(`Failed to update article in database: ${error.message}`);
-  }
-
-  const updated = mapArticleFromDb(data);
   broadcastArticlesChanged('article:updated');
   return updated;
 }
 
-/**
- * Toggle article status between draft and published directly in Supabase
- */
 export async function toggleArticleStatus(id: string): Promise<Article> {
-  assertSupabaseConfigured();
+  const updated = await apiFetch<Article>(`/api/admin/articles/${encodeURIComponent(id)}/toggle-status`, {
+    method: 'POST'
+  });
 
-  let targetId = id;
-  if (!isValidUuid(targetId)) {
-    const { data: bySlug } = await supabase.from('articles').select('id, status').eq('slug', id).maybeSingle();
-    if (bySlug?.id) targetId = bySlug.id;
+  const reachable = await isSupabaseReachable();
+  if (reachable) {
+    try {
+      await supabase
+        .from('articles')
+        .update({ status: updated.status, updated_at: updated.updatedAt })
+        .or(`id.eq.${id},slug.eq.${id}`);
+    } catch {}
   }
 
-  if (!isValidUuid(targetId)) {
-    throw new Error(`Article "${id}" not found in database.`);
-  }
-
-  const { data: current, error: getError } = await supabase
-    .from('articles')
-    .select('status')
-    .eq('id', targetId)
-    .single();
-
-  if (getError || !current) {
-    throw new Error(`Article not found: ${getError?.message || 'Unknown'}`);
-  }
-
-  const nextStatus = current.status === 'published' ? 'draft' : 'published';
-  const { data, error } = await supabase
-    .from('articles')
-    .update({ status: nextStatus, updated_at: new Date().toISOString() })
-    .eq('id', targetId)
-    .select('*, categories(id, name, slug)')
-    .single();
-
-  if (error || !data) {
-    throw new Error(`Failed to toggle article status: ${error?.message || 'Unknown'}`);
-  }
-
-  const updated = mapArticleFromDb(data);
-  broadcastArticlesChanged('article:toggled');
+  broadcastArticlesChanged('article:status-toggled');
   return updated;
 }
 
-/**
- * Delete an article directly from Supabase articles table
- */
 export async function deleteAdminArticle(id: string): Promise<void> {
-  assertSupabaseConfigured();
+  await apiFetch<{ success: boolean; message: string }>(`/api/admin/articles/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  });
 
-  let targetId = id;
-  if (!isValidUuid(targetId)) {
-    const { data: bySlug } = await supabase.from('articles').select('id').eq('slug', id).maybeSingle();
-    if (bySlug?.id) targetId = bySlug.id;
-  }
-
-  const { error } = await supabase
-    .from('articles')
-    .delete()
-    .eq(isValidUuid(targetId) ? 'id' : 'slug', targetId);
-
-  if (error) {
-    console.error('Supabase article deletion error:', error);
-    throw new Error(`Failed to delete article: ${error.message}`);
+  const reachable = await isSupabaseReachable();
+  if (reachable) {
+    try {
+      await supabase.from('articles').delete().or(`id.eq.${id},slug.eq.${id}`);
+    } catch {}
   }
 
   broadcastArticlesChanged('article:deleted');
 }
 
 // ==============================================================================
-// FILE & MEDIA UPLOADS
+// ASSET & DOCUMENT MANAGEMENT
 // ==============================================================================
 
-/**
- * Import and parse .docx files into structured HTML, title, excerpt, and reading time
- */
 export async function importDocxFile(file: File): Promise<{
   success: boolean;
   title: string;
@@ -1188,15 +803,10 @@ export async function importDocxFile(file: File): Promise<{
     const rawResult = await mammoth.extractRawText({ arrayBuffer });
 
     const htmlContent = result.value;
-    const rawText = rawResult.value.trim();
+    const rawText = rawResult.value;
 
-    // Extract title from filename or first line
-    let title = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
     const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean);
-    if (lines.length > 0 && lines[0].length < 120) {
-      title = lines[0];
-    }
-
+    const title = lines.length > 0 ? lines[0] : file.name.replace(/\.[^/.]+$/, '');
     const excerpt = lines.slice(1, 4).join(' ').substring(0, 180) + '...';
     const wordCount = rawText.split(/\s+/).filter(Boolean).length;
     const readTime = `${Math.max(1, Math.ceil(wordCount / 200))} min read`;
@@ -1215,308 +825,101 @@ export async function importDocxFile(file: File): Promise<{
   }
 }
 
-/**
- * Upload image to Supabase Storage bucket 'article-covers' (or Data URL fallback)
- */
 export async function uploadImageFile(file: File): Promise<{ success: boolean; url: string }> {
   try {
-    const fileExt = file.name.split('.').pop() || 'jpg';
-    const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}.${fileExt}`;
-    const filePath = `covers/${fileName}`;
+    const formData = new FormData();
+    formData.append('image', file);
 
-    const { error: uploadError } = await supabase.storage
-      .from('article-covers')
-      .upload(filePath, file, {
-        cacheControl: '3600',
-        upsert: false
-      });
-
-    if (uploadError) {
-      console.warn('Supabase storage upload note, using inline Data URL fallback:', uploadError.message);
-      return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve({ success: true, url: reader.result as string });
-        reader.onerror = () => reject(new Error('Failed to read image file'));
-        reader.readAsDataURL(file);
-      });
+    const token = getAdminToken();
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
     }
 
-    const { data: publicUrlData } = supabase.storage
-      .from('article-covers')
-      .getPublicUrl(filePath);
-
-    return {
-      success: true,
-      url: publicUrlData.publicUrl
-    };
-  } catch (err: any) {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve({ success: true, url: reader.result as string });
-      reader.onerror = () => resolve({ success: true, url: 'https://images.unsplash.com/photo-1455390582262-044cdead277a?q=80&w=1200&auto=format&fit=crop' });
-      reader.readAsDataURL(file);
+    const res = await fetch('/api/admin/upload-image', {
+      method: 'POST',
+      headers,
+      body: formData
     });
-  }
-}
 
-// ==============================================================================
-// CATEGORIES CRUD (Exclusively in Supabase)
-// ==============================================================================
-
-/**
- * Create a new Category directly in Supabase
- */
-export async function createAdminCategory(data: { name: string; description?: string }): Promise<Category> {
-  assertSupabaseConfigured();
-
-  if (!data.name?.trim()) {
-    throw new Error('Category name is required.');
-  }
-
-  const cleanName = data.name.trim();
-  const slug = cleanName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
-  const newId = generateUuid();
-
-  const { data: cat, error } = await supabase
-    .from('categories')
-    .insert([
-      {
-        id: newId,
-        name: cleanName,
-        slug: slug || `category-${Date.now()}`,
-        description: data.description?.trim() || ''
-      }
-    ])
-    .select('*')
-    .single();
-
-  if (error) {
-    console.error('Supabase create category error:', error);
-    throw new Error(`Failed to create category: ${error.message}`);
-  }
-
-  const mapped = mapCategoryFromDb(cat);
-  broadcastArticlesChanged('category:created');
-  return mapped;
-}
-
-/**
- * Update Category directly in Supabase
- */
-export async function updateAdminCategory(id: string, data: { name?: string; description?: string }): Promise<Category> {
-  assertSupabaseConfigured();
-
-  const updates: Record<string, any> = {
-    updated_at: new Date().toISOString()
-  };
-
-  if (data.name?.trim()) {
-    updates.name = data.name.trim();
-    updates.slug = data.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
-  }
-  if (data.description !== undefined) {
-    updates.description = data.description.trim();
-  }
-
-  const { data: cat, error } = await supabase
-    .from('categories')
-    .update(updates)
-    .eq('id', id)
-    .select('*')
-    .maybeSingle();
-
-  if (error) {
-    console.error('Supabase update category error:', error);
-    throw new Error(`Failed to update category: ${error.message}`);
-  }
-
-  let finalCat = cat;
-  if (!finalCat) {
-    const { data: refetched } = await supabase
-      .from('categories')
-      .select('*')
-      .eq('id', id)
-      .maybeSingle();
-    finalCat = refetched;
-  }
-
-  if (!finalCat) {
-    throw new Error('Category was not found in Supabase.');
-  }
-
-  const mapped = mapCategoryFromDb(finalCat);
-  broadcastArticlesChanged('category:updated');
-  return mapped;
-}
-
-/**
- * Delete Category directly from Supabase.
- * Reassigns any articles using this category to another category first
- * to avoid foreign-key constraint conflicts in Postgres.
- */
-export async function deleteAdminCategory(id: string): Promise<void> {
-  assertSupabaseConfigured();
-
-  // 1. Check if any articles reference this category_id
-  try {
-    const { data: articlesUsingCat } = await supabase
-      .from('articles')
-      .select('id')
-      .eq('category_id', id);
-
-    if (articlesUsingCat && articlesUsingCat.length > 0) {
-      // Find another remaining category to reassign to
-      const { data: replacementCat } = await supabase
-        .from('categories')
-        .select('id')
-        .neq('id', id)
-        .limit(1)
-        .maybeSingle();
-
-      if (replacementCat?.id) {
-        await supabase
-          .from('articles')
-          .update({ category_id: replacementCat.id })
-          .eq('category_id', id);
-      }
+    if (res.ok) {
+      const data = await res.json();
+      return { success: true, url: data.url };
     }
-  } catch (reassignErr) {
-    console.warn('Article category reassignment check:', reassignErr);
+  } catch (err) {
+    console.warn('Image upload endpoint note, using FileReader data URL fallback:', err);
   }
 
-  // 2. Delete permanently from Supabase categories table
-  const { error } = await supabase
-    .from('categories')
-    .delete()
-    .eq('id', id);
+  // Safe fallback to Data URL
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve({ success: true, url: reader.result as string });
+    reader.onerror = () => resolve({
+      success: true,
+      url: 'https://images.unsplash.com/photo-1455390582262-044cdead277a?q=80&w=1200&auto=format&fit=crop'
+    });
+    reader.readAsDataURL(file);
+  });
+}
 
-  if (error) {
-    console.error('Supabase delete category error:', error);
-    throw new Error(`Failed to delete category: ${error.message}`);
-  }
+// ==============================================================================
+// CATEGORIES CRUD
+// ==============================================================================
 
+export async function createAdminCategory(data: { name: string; description?: string }): Promise<Category> {
+  const res = await apiFetch<Category>('/api/admin/categories', {
+    method: 'POST',
+    body: JSON.stringify(data)
+  });
+  broadcastArticlesChanged('category:created');
+  return res;
+}
+
+export async function updateAdminCategory(id: string, data: { name?: string; description?: string }): Promise<Category> {
+  const res = await apiFetch<Category>(`/api/admin/categories/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(data)
+  });
+  broadcastArticlesChanged('category:updated');
+  return res;
+}
+
+export async function deleteAdminCategory(id: string): Promise<void> {
+  await apiFetch<{ success: boolean; message: string }>(`/api/admin/categories/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  });
   broadcastArticlesChanged('category:deleted');
 }
 
 // ==============================================================================
-// MESSAGES & INBOX CRUD (Exclusively in Supabase)
+// MESSAGES & INBOX CRUD
 // ==============================================================================
 
-/**
- * Fetch all reader inbox messages directly from Supabase messages and message_replies tables
- */
 export async function fetchAdminMessages(): Promise<Message[]> {
-  assertSupabaseConfigured();
-
-  const { data, error } = await supabase
-    .from('messages')
-    .select('*, message_replies(*)')
-    .order('created_at', { ascending: false });
-
-  if (error) {
-    console.error('Supabase fetchAdminMessages error:', error);
-    throw new Error(`Database error fetching messages: ${error.message}`);
-  }
-
-  return (data || []).map(mapMessageFromDb);
+  return apiFetch<Message[]>('/api/admin/messages');
 }
 
-/**
- * Mark a message as read or unread directly in Supabase messages table
- */
 export async function toggleMessageRead(id: string, read?: boolean): Promise<Message> {
-  assertSupabaseConfigured();
-
-  let targetRead = read;
-  if (targetRead === undefined) {
-    const { data: current } = await supabase.from('messages').select('read').eq('id', id).single();
-    targetRead = current ? !current.read : true;
-  }
-
-  const { data, error } = await supabase
-    .from('messages')
-    .update({ read: targetRead })
-    .eq('id', id)
-    .select('*, message_replies(*)')
-    .single();
-
-  if (error || !data) {
-    throw new Error(`Failed to update message: ${error?.message || 'Unknown'}`);
-  }
-
-  const mapped = mapMessageFromDb(data);
+  const res = await apiFetch<Message>(`/api/admin/messages/${encodeURIComponent(id)}/read`, {
+    method: 'PUT',
+    body: JSON.stringify({ read })
+  });
   broadcastArticlesChanged('message:updated');
-  return mapped;
+  return res;
 }
 
-/**
- * Send author reply to reader message directly into Supabase message_replies table
- */
 export async function replyToMessage(messageId: string, text: string): Promise<{ success: boolean; reply: any }> {
-  assertSupabaseConfigured();
-
-  if (!text?.trim()) {
-    throw new Error('Reply text cannot be empty.');
-  }
-
-  const { data: authData } = await supabase.auth.getUser();
-  const authorId = authData?.user?.id && isValidUuid(authData.user.id) ? authData.user.id : null;
-
-  const { data, error } = await supabase
-    .from('message_replies')
-    .insert([
-      {
-        message_id: messageId,
-        author_id: authorId,
-        reply_text: text.trim()
-      }
-    ])
-    .select('*')
-    .single();
-
-  if (error) {
-    console.error('Supabase reply insert error:', error);
-    throw new Error(`Failed to send reply: ${error.message}`);
-  }
-
-  // Mark parent message as read
-  await supabase.from('messages').update({ read: true }).eq('id', messageId);
-
-  const replyObj = {
-    id: data.id,
-    text: data.reply_text,
-    sentAt: data.created_at
-  };
-
+  const res = await apiFetch<{ success: boolean; reply: any }>(`/api/admin/messages/${encodeURIComponent(messageId)}/reply`, {
+    method: 'POST',
+    body: JSON.stringify({ text })
+  });
   broadcastArticlesChanged('message:replied');
-  return { success: true, reply: replyObj };
+  return res;
 }
 
-/**
- * Delete a message directly from Supabase messages and message_replies tables
- */
 export async function deleteAdminMessage(id: string): Promise<void> {
-  assertSupabaseConfigured();
-
-  // Delete replies first if cascade is not set
-  try {
-    await supabase
-      .from('message_replies')
-      .delete()
-      .eq('message_id', id);
-  } catch (repErr) {
-    console.warn('Reply deletion error:', repErr);
-  }
-
-  const { error } = await supabase
-    .from('messages')
-    .delete()
-    .eq('id', id);
-
-  if (error) {
-    console.error('Supabase delete message error:', error);
-    throw new Error(`Failed to delete message: ${error.message}`);
-  }
-
+  await apiFetch<{ success: boolean; message: string }>(`/api/admin/messages/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  });
   broadcastArticlesChanged('message:deleted');
 }

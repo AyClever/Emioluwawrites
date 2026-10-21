@@ -100,7 +100,53 @@ const INITIAL_CATEGORIES: Category[] = [
   },
 ];
 
-const INITIAL_ARTICLES: Article[] = [];
+const INITIAL_ARTICLES: Article[] = [
+  {
+    id: 'art-seed-1',
+    slug: 'starting-small-what-lecture-halls-in-akoka-taught-me',
+    title: 'Starting Small: What Lecture Halls in Akoka Taught Me About Showing Up',
+    excerpt: 'Reflections on walking into 8 AM lectures, feeling unremarkable among hundreds of ambitious peers, and discovering that quiet consistency counts more than loud beginnings.',
+    content: '<p>There is a specific kind of quiet that fills a university amphitheatre before the lecturer walks in. Papers rustle, metal chairs creak against worn tiles, and everyone pretends to be slightly more prepared than they actually are.</p><p>When I first started attending classes here in Akoka, I felt swallowed whole. In Lagos, everyone is always moving with an aggressive sense of destiny. Students discuss side hustles, tech fellowships, exchange programs, and five-year master plans with a casual fluency that left me wondering if I had somehow arrived late to my own life.</p><p>For months, I thought the only way to matter was to make a dramatic entrance. I thought I needed an extraordinary breakthrough or a viral milestone to justify the space I occupied.</p><p>Then one rainy Tuesday in November, watching rain lash the glass louvers of the faculty library, I realised something freeing: most enduring things are built without fanfare. The students who truly mastered the difficult courses were not the ones boasting in the courtyard; they were the ones who sat in the second row every morning, notebooks open, taking notes with calm regularity.</p><p>Starting small is not an admission of defeat; it is a confession of patience. It means respecting the seedling before you demand shade from the oak. If you have only twenty minutes to read today, read for twenty minutes. If you have only one honest paragraph in you tonight, write that single paragraph. The harvest takes care of itself when you protect the discipline of showing up.</p>',
+    category: 'Student Life',
+    featuredImage: 'https://images.unsplash.com/photo-1455390582262-044cdead277a?q=80&w=1200&auto=format&fit=crop',
+    readTime: '4 min read',
+    publishedAt: '2026-08-15',
+    status: 'published',
+    views: 42,
+    createdAt: '2026-08-15T09:00:00.000Z',
+    updatedAt: '2026-08-15T09:00:00.000Z'
+  },
+  {
+    id: 'art-seed-2',
+    slug: 'the-art-of-slow-growth-in-an-urgent-world',
+    title: 'The Art of Slow Growth in an Urgent World',
+    excerpt: 'When everyone around you seems to be announcing milestones and breakthrough seasons, choosing patience feels like rebellion. Here is why slow roots weather the storm.',
+    content: '<p>We live in an era that worships the overnight sensation. Social media timelines are algorithmic parades of congratulations: <em>\'I am thrilled to announce,\' \'At 21, I just bought,\' \'So grateful for this sudden elevation.\'</em></p><p>If you are not careful, you begin measuring your private chapter two against someone else\'s curated chapter twenty. You begin suspecting your quiet days of being wasted days.</p><p>I have had to teach my heart to slow down. The bamboo spends years developing an underground root network before a single shoot pierces the soil. To the casual observer, nothing is happening. But beneath the surface, an intricate architecture of survival is being forged.</p><p>When success comes prematurely, before character has been tempered by delay, it crumbles under the first gust of adversity. Slow growth gives you the gift of obscurity—the freedom to make mistakes where nobody is taking screenshots, the grace to refine your taste in silence, and the resilience to stay grounded when praise eventually arrives.</p><p>Give yourself permission to grow at the speed of wisdom, not the speed of an algorithm.</p>',
+    category: 'Personal Growth',
+    featuredImage: 'https://images.unsplash.com/photo-1457369804613-52c61a468e7d?q=80&w=1200&auto=format&fit=crop',
+    readTime: '5 min read',
+    publishedAt: '2026-08-28',
+    status: 'published',
+    views: 68,
+    createdAt: '2026-08-28T14:30:00.000Z',
+    updatedAt: '2026-08-28T14:30:00.000Z'
+  },
+  {
+    id: 'art-seed-3',
+    slug: 'rainy-mornings-in-lagos-unopened-notebook',
+    title: 'Rainy Mornings in Lagos and the Comfort of an Unopened Notebook',
+    excerpt: 'Some days the yellow Danfo buses crawl through damp streets, the kettle whistles, and writing becomes less of a performance and more of a sanctuary.',
+    content: '<p>When rain falls over Lagos, the entire city lowers its voice by a single octave. The perpetual blare of vehicle horns softens against damp tarmac, and the relentless speed of the day pauses, if only for an hour.</p><p>On such mornings, I like sitting near the dining table with a steaming mug of tea and a fresh notebook. There is something sacred about an empty lined page before a pen has touched it—a clean slate holding no regrets from yesterday and no demands for tomorrow.</p><p>As young writers, we are often pressured to monetize every thought or turn every feeling into consumable content. But some words are meant only for the journal. Some observations are meant to be savored privately, like the scent of rain on dry red earth or the sound of your mother singing softly in the kitchen.</p><p>Writing, at its truest, is not about being seen by thousands; it is about paying attention to the life you have been given right here, right now.</p>',
+    category: 'Life Experiences',
+    featuredImage: 'https://images.unsplash.com/photo-1519682337058-a94d519337bc?q=80&w=1200&auto=format&fit=crop',
+    readTime: '3 min read',
+    publishedAt: '2026-09-02',
+    status: 'published',
+    views: 35,
+    createdAt: '2026-09-02T10:15:00.000Z',
+    updatedAt: '2026-09-02T10:15:00.000Z'
+  }
+];
 
 const INITIAL_MESSAGES: Message[] = [
   {

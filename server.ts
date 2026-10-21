@@ -80,6 +80,16 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
+// Public Author Profile
+app.get('/api/author-profile', (_req, res) => {
+  const db = getDatabase();
+  res.json({
+    name: db.admin?.name || 'Emioluwa',
+    bio: db.admin?.bio || 'Young Nigerian writer, essayist, and student crafting words that connect and stories that stay.',
+    email: db.admin?.email || 'emioluwawrites@gmail.com'
+  });
+});
+
 // Get Categories (with published count)
 app.get('/api/categories', (_req, res) => {
   const db = getDatabase();
@@ -261,29 +271,29 @@ app.post('/api/auth/login', (req, res) => {
   const cleanEmail = email.toLowerCase().trim();
   const cleanPass = (password || '').trim();
 
-  // Strict check: Only the single authorized admin account is permitted
-  const AUTHORIZED_ADMIN_EMAIL = 'emioluwawrites@gmail.com';
-
-  if (cleanEmail !== AUTHORIZED_ADMIN_EMAIL) {
-    return res.status(401).json({ error: 'Access denied. Readers do not have access to the admin portal.' });
-  }
-
   const db = getDatabase();
   const admin = db.admin;
+  const AUTHORIZED_ADMIN_EMAIL = 'emioluwawrites@gmail.com';
+  const currentAdminEmail = (admin?.email || AUTHORIZED_ADMIN_EMAIL).toLowerCase();
+
+  // Strict check: Only the single authorized admin account is permitted
+  if (cleanEmail !== AUTHORIZED_ADMIN_EMAIL && cleanEmail !== currentAdminEmail) {
+    return res.status(401).json({ error: 'Access denied. Readers do not have access to the admin portal.' });
+  }
 
   const isValidPassword = Boolean(admin?.passwordHash && bcrypt.compareSync(cleanPass, admin.passwordHash));
   if (!isValidPassword) {
     return res.status(401).json({ error: 'Invalid email or password' });
   }
 
-  const token = generateToken({ adminId: admin?.id || 'admin-1', email: 'emioluwawrites@gmail.com' });
+  const token = generateToken({ adminId: admin?.id || 'admin-1', email: admin?.email || AUTHORIZED_ADMIN_EMAIL });
 
   res.json({
     success: true,
     token,
     admin: {
       id: admin?.id || 'admin-1',
-      email: 'emioluwawrites@gmail.com',
+      email: admin?.email || AUTHORIZED_ADMIN_EMAIL,
       name: admin?.name || 'Emioluwa',
       bio: admin?.bio || 'Young Nigerian writer, essayist, and student crafting words that connect and stories that stay.'
     }
